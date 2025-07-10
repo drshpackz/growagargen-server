@@ -585,11 +585,12 @@ async function sendCategoryNotification(deviceToken, category, items) {
   const categoryInfo = getCategoryInfo(category);
   
   if (items.length === 1) {
-    // Single item in category
+    // Single item in category - Professional formatting
     const item = items[0];
     notification.alert = {
-      title: `${categoryInfo.emoji} ${categoryInfo.name} Back in Stock!`,
-      body: `${item.name} is now available (x${item.quantity})`
+      title: `${categoryInfo.name} Restocked!`,
+      subtitle: `${item.name} is back in stock`,
+      body: `Available now: ${item.quantity} ${item.quantity === 1 ? 'item' : 'items'}`
     };
     notification.payload = {
       item_name: item.name,
@@ -598,14 +599,23 @@ async function sendCategoryNotification(deviceToken, category, items) {
       type: 'category_stock_alert'
     };
   } else {
-    // Multiple items in category
-    const itemNames = items.slice(0, 3).map(item => item.name).join(', ');
-    const title = `${categoryInfo.emoji} ${categoryInfo.name} Back in Stock!`;
-    const body = items.length <= 3 
-      ? `${itemNames} are now available`
-      : `${itemNames} and ${items.length - 3} more ${categoryInfo.name.toLowerCase()} are available`;
+    // Multiple items in category - Professional formatting
+    const itemNames = items.slice(0, 2).map(item => item.name).join(' & ');
+    const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
     
-    notification.alert = { title, body };
+    let title, subtitle, body;
+    
+    if (items.length === 2) {
+      title = `${categoryInfo.name} Restocked!`;
+      subtitle = `${itemNames} are back`;
+      body = `${totalItems} items available now`;
+    } else {
+      title = `${categoryInfo.name} Restocked!`;
+      subtitle = `${itemNames} & ${items.length - 2} more`;
+      body = `${totalItems} items available now`;
+    }
+    
+    notification.alert = { title, subtitle, body };
     notification.payload = {
       items: items,
       category: categoryInfo.name,
@@ -613,16 +623,23 @@ async function sendCategoryNotification(deviceToken, category, items) {
     };
   }
 
+  // Professional notification enhancements
   notification.badge = items.length;
   notification.sound = getUserSoundPreference(deviceToken);
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+  
+  // Add thread identifier for grouping related notifications
+  notification.threadId = `stock-${categoryInfo.name.toLowerCase()}`;
+  
+  // Add category for potential action buttons (future enhancement)
+  notification.category = `STOCK_ALERT_${categoryInfo.name.toUpperCase()}`;
 
-  console.log(`📨 DEBUG: Sending ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
+  console.log(`📨 DEBUG: Sending professional ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
   
   if (result.sent.length > 0) {
-    console.log(`✅ Sent ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
+    console.log(`✅ Sent professional ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
   }
   
   if (result.failed.length > 0) {
@@ -637,12 +654,11 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   const rarity = getItemRarity(item.name);
   const rarityInfo = getRarityInfo(rarity);
   
-  // Special titles for premium seeds
-  const title = `${rarityInfo.emoji} ${rarity} Item Updated!`;
-  
+  // Professional premium notification formatting
   notification.alert = {
-    title: title,
-    body: `${item.name} is now available (x${item.quantity})`
+    title: `${rarityInfo.emoji} ${rarity} Item Available!`,
+    subtitle: `${item.name} is back in stock`,
+    body: `Rare find: ${item.quantity} ${item.quantity === 1 ? 'item' : 'items'} available`
   };
   notification.payload = {
     item_name: item.name,
@@ -651,16 +667,22 @@ async function sendPremiumSeedNotification(deviceToken, item) {
     category: getItemCategory(item.name),
     type: 'premium_seed_stock_alert'
   };
+  
+  // Professional notification enhancements
   notification.badge = 1;
   notification.sound = getUserSoundPreference(deviceToken);
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+  
+  // Group premium notifications together
+  notification.threadId = `premium-${rarity.toLowerCase()}`;
+  notification.category = `PREMIUM_ALERT_${rarity.toUpperCase()}`;
 
-  console.log(`📨 DEBUG: Sending ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+  console.log(`📨 DEBUG: Sending professional ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
 
   if (result.sent.length > 0) {
-    console.log(`✅ Sent ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+    console.log(`✅ Sent professional ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
   }
   if (result.failed.length > 0) {
     console.log(`❌ Failed to send ${rarity} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
@@ -900,8 +922,9 @@ app.post('/api/test-notification', async (req, res) => {
     // Send test notification
     const notification = new apn.Notification();
     notification.alert = {
-      title: '🧪 Test Notification',
-      body: message || 'This is a test notification from your GrowAGarden server!'
+      title: 'GrowAGarden Test',
+      subtitle: 'Testing notification system',
+      body: message || 'Your notification system is working perfectly!'
     };
     
     // Simple payload without image URLs
@@ -913,6 +936,10 @@ app.post('/api/test-notification', async (req, res) => {
     notification.badge = 1;
     notification.sound = getUserSoundPreference(device_token);
     notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+    
+    // Professional test notification grouping
+    notification.threadId = 'test-notifications';
+    notification.category = 'TEST_NOTIFICATION';
 
     const result = await apnProvider.send(notification, [device_token]);
     
