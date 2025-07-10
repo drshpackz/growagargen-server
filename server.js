@@ -398,6 +398,127 @@ function getRarityInfo(rarity) {
   return rarityMap[rarity] || rarityMap['Unknown'];
 }
 
+// NEW: Get emoji for specific items
+function getItemEmoji(itemName) {
+  const name = itemName.toLowerCase();
+  
+  // Seeds emojis
+  const seedEmojis = {
+    'bamboo': '🎋',
+    'tomato': '🍅',
+    'mango': '🥭',
+    'cactus': '🌵',
+    'apple': '🍎',
+    'grape': '🍇',
+    'watermelon': '🍉',
+    'strawberry': '🍓',
+    'pumpkin': '🎃',
+    'pepper': '🌶️',
+    'mushroom': '🍄',
+    'cacao': '🍫',
+    'avocado': '🥑',
+    'blueberry': '🫐',
+    'carrot': '🥕',
+    'coconut': '🥥',
+    'beanstalk': '🌱',
+    'daffodil': '🌼',
+    'orange tulip': '🌷',
+    'dragon fruit': '🐉',
+    'burning bud': '🔥',
+    'ember lily': '🔥',
+    'sugar apple': '🌺'
+  };
+  
+  // Gear emojis
+  const gearEmojis = {
+    'watering can': '🪣',
+    'trowel': '🔧',
+    'magnifying glass': '🔍',
+    'cleaning spray': '🧴',
+    'recall wrench': '🔧',
+    'basic sprinkler': '💦',
+    'advanced sprinkler': '💦',
+    'godly sprinkler': '💦',
+    'master sprinkler': '💦',
+    'tanning mirror': '🪞',
+    'favorite tool': '⭐',
+    'harvest tool': '🛠️',
+    'friendship pot': '🍯'
+  };
+  
+  // Check seeds first
+  for (const [seed, emoji] of Object.entries(seedEmojis)) {
+    if (name.includes(seed)) {
+      return emoji;
+    }
+  }
+  
+  // Check gear
+  for (const [gear, emoji] of Object.entries(gearEmojis)) {
+    if (name.includes(gear)) {
+      return emoji;
+    }
+  }
+  
+  // Check if it's an egg (all eggs get 🥚 + optional second emoji)
+  if (name.includes('egg')) {
+    let eggEmoji = '🥚';
+    
+    // Add specific egg emojis
+    if (name.includes('bee')) eggEmoji += '🐝';
+    else if (name.includes('bug')) eggEmoji += '🐛';
+    else if (name.includes('rare') || name.includes('legendary')) eggEmoji += '✨';
+    else if (name.includes('paradise') || name.includes('summer')) eggEmoji += '🌟';
+    
+    return eggEmoji;
+  }
+  
+  // Fallback emojis by category
+  const stockData = stockItems.get(itemName);
+  if (stockData) {
+    if (stockData.category === 'seeds') return '🌱';
+    if (stockData.category === 'gear') return '⚙️';
+    if (stockData.category === 'eggs') return '🥚';
+    if (stockData.category === 'cosmetic') return '🎨';
+  }
+  
+  return '📦'; // Default fallback
+}
+
+// NEW: Get category emoji for titles
+function getCategoryEmoji(category) {
+  const categoryMap = {
+    'seeds': '🌱',
+    'gear': '⚙️',
+    'eggs': '🥚',
+    'cosmetic': '🎨'
+  };
+  
+  return categoryMap[category] || '📦';
+}
+
+// NEW: Format item with quantity and emoji
+function formatItemWithQuantity(item) {
+  const emoji = getItemEmoji(item.name);
+  const displayName = item.originalName || item.name;
+  return `x${item.quantity} ${displayName} ${emoji}`;
+}
+
+// NEW: Format list of items with bullet separators
+function formatItemList(items, maxItems = 6) {
+  const formattedItems = items.map(item => formatItemWithQuantity(item));
+  
+  if (formattedItems.length <= maxItems) {
+    // Show all items
+    return formattedItems.join(' • ');
+  } else {
+    // Show first maxItems, then "& more"
+    const visibleItems = formattedItems.slice(0, maxItems);
+    const remainingCount = formattedItems.length - maxItems;
+    return visibleItems.join(' • ') + ` & ${remainingCount} more`;
+  }
+}
+
 // Check if item should send notifications (not Common rarity)
 function shouldSendNotificationForItem(itemName) {
   const rarity = getItemRarity(itemName);
@@ -581,47 +702,23 @@ async function sendCategoryNotification(deviceToken, category, items) {
   
   const notification = new apn.Notification();
   
-  // Category-specific emoji and titles
-  const categoryInfo = getCategoryInfo(category);
+  // NEW UX: Get category emoji and create modern title
+  const categoryEmoji = getCategoryEmoji(category);
+  const categoryName = category.charAt(0).toUpperCase() + category.slice(1);
   
-  if (items.length === 1) {
-    // Single item in category - Professional formatting
-    const item = items[0];
-    notification.alert = {
-      title: `${categoryInfo.name} Restocked!`,
-      subtitle: `${item.name} is back in stock`,
-      body: `Available now: ${item.quantity} ${item.quantity === 1 ? 'item' : 'items'}`
-    };
-    notification.payload = {
-      item_name: item.name,
-      quantity: item.quantity,
-      category: categoryInfo.name,
-      type: 'category_stock_alert'
-    };
-  } else {
-    // Multiple items in category - Professional formatting
-    const itemNames = items.slice(0, 2).map(item => item.name).join(' & ');
-    const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
-    
-    let title, subtitle, body;
-    
-    if (items.length === 2) {
-      title = `${categoryInfo.name} Restocked!`;
-      subtitle = `${itemNames} are back`;
-      body = `${totalItems} items available now`;
-    } else {
-      title = `${categoryInfo.name} Restocked!`;
-      subtitle = `${itemNames} & ${items.length - 2} more`;
-      body = `${totalItems} items available now`;
-    }
-    
-    notification.alert = { title, subtitle, body };
-    notification.payload = {
-      items: items,
-      category: categoryInfo.name,
-      type: 'category_bulk_stock_alert'
-    };
-  }
+  // NEW UX: Create clean, emoji-enhanced body
+  const itemList = formatItemList(items, 6);
+  
+  notification.alert = {
+    title: `${categoryEmoji} ${categoryName} Restocked!`,
+    body: `${itemList} are now in stock.`
+  };
+  
+  notification.payload = {
+    items: items,
+    category: categoryName,
+    type: 'category_stock_alert'
+  };
 
   // Professional notification enhancements
   notification.badge = items.length;
@@ -629,21 +726,21 @@ async function sendCategoryNotification(deviceToken, category, items) {
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
   
   // Add thread identifier for grouping related notifications
-  notification.threadId = `stock-${categoryInfo.name.toLowerCase()}`;
+  notification.threadId = `stock-${categoryName.toLowerCase()}`;
   
   // Add category for potential action buttons (future enhancement)
-  notification.category = `STOCK_ALERT_${categoryInfo.name.toUpperCase()}`;
+  notification.category = `STOCK_ALERT_${categoryName.toUpperCase()}`;
 
-  console.log(`📨 DEBUG: Sending professional ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
+  console.log(`📨 NEW UX: Sending ${categoryName} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
   
   if (result.sent.length > 0) {
-    console.log(`✅ Sent professional ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
+    console.log(`✅ Sent modern ${categoryName} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
   }
   
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+    console.log(`❌ Failed to send ${categoryName} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
     console.log(`❌ DEBUG: Full failure result:`, result.failed[0]);
   }
 }
@@ -654,11 +751,12 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   const rarity = getItemRarity(item.name);
   const rarityInfo = getRarityInfo(rarity);
   
-  // Professional premium notification formatting
+  // NEW UX: Professional premium notification formatting
+  const itemWithEmoji = formatItemWithQuantity(item);
+  
   notification.alert = {
-    title: `${rarityInfo.emoji} ${rarity} Item Available!`,
-    subtitle: `${item.name} is back in stock`,
-    body: `Rare find: ${item.quantity} ${item.quantity === 1 ? 'item' : 'items'} available`
+    title: `🌈 Ultra-Rare Find!`,
+    body: `${itemWithEmoji} is here—super limited!`
   };
   notification.payload = {
     item_name: item.name,
@@ -677,30 +775,17 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   notification.threadId = `premium-${rarity.toLowerCase()}`;
   notification.category = `PREMIUM_ALERT_${rarity.toUpperCase()}`;
 
-  console.log(`📨 DEBUG: Sending professional ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+  console.log(`📨 NEW UX: Sending Ultra-Rare notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
 
   if (result.sent.length > 0) {
-    console.log(`✅ Sent professional ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+    console.log(`✅ Sent modern Ultra-Rare notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
   }
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send ${rarity} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+    console.log(`❌ Failed to send Ultra-Rare notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
     console.log(`❌ DEBUG: Full failure result:`, result.failed[0]);
   }
-}
-
-// Get category information (emoji and display name)
-function getCategoryInfo(category) {
-  const categoryMap = {
-    'seeds': { emoji: '🌱', name: 'Seeds' },
-    'gear': { emoji: '⚙️', name: 'Gear' },
-    'cosmetic': { emoji: '🎨', name: 'Cosmetic' },
-    'eggs': { emoji: '🥚', name: 'Eggs' },
-    'unknown': { emoji: '📦', name: 'Items' }
-  };
-  
-  return categoryMap[category] || categoryMap['unknown'];
 }
 
 // Auto-fetch stock data every 5 minutes
@@ -919,12 +1004,11 @@ app.post('/api/test-notification', async (req, res) => {
       return res.status(400).json({ error: 'Device token required' });
     }
 
-    // Send test notification
+    // Send test notification with NEW UX format
     const notification = new apn.Notification();
     notification.alert = {
-      title: 'GrowAGarden Test',
-      subtitle: 'Testing notification system',
-      body: message || 'Your notification system is working perfectly!'
+      title: '✅ Notification Test',
+      body: message || 'This is a test. You\'ll get real alerts like "x15 Bamboo 🎋" when items restock.'
     };
     
     // Simple payload without image URLs
@@ -943,11 +1027,12 @@ app.post('/api/test-notification', async (req, res) => {
 
     const result = await apnProvider.send(notification, [device_token]);
     
-    console.log(`📧 Test notification sent to ${device_token.substring(0, 10)}... with category: ${category || 'Seeds'}`);
+    console.log(`📧 NEW UX: Test notification sent to ${device_token.substring(0, 10)}... with example format`);
     
     res.json({ 
       success: true, 
-      message: 'Test notification sent',
+      message: 'Test notification sent with new UX format',
+      example_format: 'x15 Bamboo 🎋',
       category: category || 'Seeds',
       result: {
         sent: result.sent.length,
