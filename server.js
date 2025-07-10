@@ -1223,6 +1223,173 @@ app.post('/api/clear-notification-cache', (req, res) => {
   }
 });
 
+// Countdown endpoints for shop restock times
+app.get('/api/countdown/seeds', (req, res) => {
+  try {
+    const startTime = process.hrtime.bigint();
+    const countdownData = calculateCategoryCountdown('seeds', 5, 'minutes');
+    const endTime = process.hrtime.bigint();
+    
+    console.log(`⏰ Seeds countdown calculated in ${Number(endTime - startTime) / 1000000}ms`);
+    res.json(countdownData);
+  } catch (error) {
+    console.error('❌ Seeds countdown error:', error);
+    res.status(500).json({ error: 'Failed to calculate seeds countdown', details: error.message });
+  }
+});
+
+app.get('/api/countdown/gear', (req, res) => {
+  try {
+    const startTime = process.hrtime.bigint();
+    const countdownData = calculateCategoryCountdown('gear', 5, 'minutes');
+    const endTime = process.hrtime.bigint();
+    
+    console.log(`⏰ Gear countdown calculated in ${Number(endTime - startTime) / 1000000}ms`);
+    res.json(countdownData);
+  } catch (error) {
+    console.error('❌ Gear countdown error:', error);
+    res.status(500).json({ error: 'Failed to calculate gear countdown', details: error.message });
+  }
+});
+
+app.get('/api/countdown/eggs', (req, res) => {
+  try {
+    const startTime = process.hrtime.bigint();
+    const countdownData = calculateCategoryCountdown('eggs', 30, 'minutes');
+    const endTime = process.hrtime.bigint();
+    
+    console.log(`⏰ Eggs countdown calculated in ${Number(endTime - startTime) / 1000000}ms`);
+    res.json(countdownData);
+  } catch (error) {
+    console.error('❌ Eggs countdown error:', error);
+    res.status(500).json({ error: 'Failed to calculate eggs countdown', details: error.message });
+  }
+});
+
+app.get('/api/countdown/cosmetic', (req, res) => {
+  try {
+    const startTime = process.hrtime.bigint();
+    const countdownData = calculateCategoryCountdown('cosmetic', 4, 'hours');
+    const endTime = process.hrtime.bigint();
+    
+    console.log(`⏰ Cosmetics countdown calculated in ${Number(endTime - startTime) / 1000000}ms`);
+    res.json(countdownData);
+  } catch (error) {
+    console.error('❌ Cosmetics countdown error:', error);
+    res.status(500).json({ error: 'Failed to calculate cosmetics countdown', details: error.message });
+  }
+});
+
+// High-performance combined countdown endpoint
+app.get('/api/countdown/all', (req, res) => {
+  try {
+    const startTime = process.hrtime.bigint();
+    const utcNow = new Date();
+    
+    // Calculate all countdowns efficiently in one pass
+    const categories = [
+      { name: 'seeds', interval: 5, type: 'minutes' },
+      { name: 'gear', interval: 5, type: 'minutes' },
+      { name: 'eggs', interval: 30, type: 'minutes' },
+      { name: 'cosmetic', interval: 4, type: 'hours' }
+    ];
+    
+    const countdowns = {};
+    
+    for (const category of categories) {
+      const categoryData = calculateOptimizedCountdown(utcNow, category.interval, category.type);
+      countdowns[category.name] = {
+        next_restock_utc: categoryData.nextRestockUTC,
+        countdown_minutes: categoryData.minutes,
+        countdown_seconds: categoryData.seconds,
+        total_seconds: categoryData.totalSeconds,
+        interval: category.interval,
+        interval_type: category.type
+      };
+    }
+    
+    const endTime = process.hrtime.bigint();
+    console.log(`⏰ All countdowns calculated in ${Number(endTime - startTime) / 1000000}ms`);
+    
+    res.json({
+      server_time_utc: utcNow.toISOString(),
+      countdowns: countdowns,
+      calculation_time_ms: Number(endTime - startTime) / 1000000
+    });
+    
+  } catch (error) {
+    console.error('❌ Combined countdown error:', error);
+    res.status(500).json({ 
+      error: 'Failed to calculate countdowns', 
+      details: error.message,
+      server_time_utc: new Date().toISOString()
+    });
+  }
+});
+
+// High-performance countdown calculation function
+function calculateCategoryCountdown(category, interval, type) {
+  const utcNow = new Date();
+  const categoryData = calculateOptimizedCountdown(utcNow, interval, type);
+  
+  return {
+    category: category,
+    next_restock_utc: categoryData.nextRestockUTC,
+    countdown_minutes: categoryData.minutes,
+    countdown_seconds: categoryData.seconds,
+    total_seconds: categoryData.totalSeconds,
+    [`interval_${type.slice(0, -1)}`]: interval // interval_minutes or interval_hours
+  };
+}
+
+// Optimized countdown calculation with minimal overhead
+function calculateOptimizedCountdown(utcNow, interval, type) {
+  const currentHour = utcNow.getUTCHours();
+  const currentMinute = utcNow.getUTCMinutes();
+  const currentSecond = utcNow.getUTCSeconds();
+  
+  let nextRestock;
+  
+  if (type === 'minutes') {
+    // Optimized minute-based calculation
+    const totalCurrentMinutes = currentHour * 60 + currentMinute;
+    const nextIntervalMinutes = Math.ceil((totalCurrentMinutes + 1) / interval) * interval;
+    
+    nextRestock = new Date(utcNow);
+    if (nextIntervalMinutes >= 1440) { // 24 hours
+      nextRestock.setUTCDate(nextRestock.getUTCDate() + 1);
+      nextRestock.setUTCHours(0, 0, 0, 0);
+    } else {
+      nextRestock.setUTCHours(Math.floor(nextIntervalMinutes / 60), nextIntervalMinutes % 60, 0, 0);
+    }
+  } else if (type === 'hours') {
+    // Optimized hour-based calculation
+    const nextIntervalHour = Math.ceil((currentHour + 1) / interval) * interval;
+    
+    nextRestock = new Date(utcNow);
+    if (nextIntervalHour >= 24) {
+      nextRestock.setUTCDate(nextRestock.getUTCDate() + 1);
+      nextRestock.setUTCHours(0, 0, 0, 0);
+    } else {
+      nextRestock.setUTCHours(nextIntervalHour, 0, 0, 0);
+    }
+  } else {
+    throw new Error(`Unsupported interval type: ${type}`);
+  }
+  
+  const timeUntilRestock = Math.max(0, nextRestock.getTime() - utcNow.getTime());
+  const totalSeconds = Math.floor(timeUntilRestock / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  
+  return {
+    nextRestockUTC: nextRestock.toISOString(),
+    minutes: minutes,
+    seconds: seconds,
+    totalSeconds: totalSeconds
+  };
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 GAG Stocks server running on port ${PORT}`);
