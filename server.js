@@ -11,9 +11,6 @@ app.use(cors());
 // Serve static files (for the banner HTML page)
 app.use(express.static('public'));
 
-// Serve banner images from a specific directory
-app.use('/banners', express.static('public/banners'));
-
 // In-memory storage for demo (replace with real database later)
 let users = new Map(); // device_token -> user data
 let stockItems = new Map(); // item_name -> quantity
@@ -587,9 +584,6 @@ async function sendCategoryNotification(deviceToken, category, items) {
   // Category-specific emoji and titles
   const categoryInfo = getCategoryInfo(category);
   
-  // Get image URL for category
-  const imageUrl = getBannerImageUrl(category);
-  
   if (items.length === 1) {
     // Single item in category
     const item = items[0];
@@ -601,7 +595,6 @@ async function sendCategoryNotification(deviceToken, category, items) {
       item_name: item.name,
       quantity: item.quantity,
       category: categoryInfo.name,
-      image_url: imageUrl, // Add image URL for downloading
       type: 'category_stock_alert'
     };
   } else {
@@ -616,7 +609,6 @@ async function sendCategoryNotification(deviceToken, category, items) {
     notification.payload = {
       items: items,
       category: categoryInfo.name,
-      image_url: imageUrl, // Add image URL for downloading
       type: 'category_bulk_stock_alert'
     };
   }
@@ -624,16 +616,13 @@ async function sendCategoryNotification(deviceToken, category, items) {
   notification.badge = items.length;
   notification.sound = getUserSoundPreference(deviceToken);
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
-  
-  // Enable rich media notifications with mutable-content
-  notification.mutableContent = 1;
 
-  console.log(`📨 DEBUG: Sending ${categoryInfo.name} notification with banner image to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
+  console.log(`📨 DEBUG: Sending ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
   
   if (result.sent.length > 0) {
-    console.log(`✅ Sent ${categoryInfo.name} notification with banner to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
+    console.log(`✅ Sent ${categoryInfo.name} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
   }
   
   if (result.failed.length > 0) {
@@ -651,10 +640,6 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   // Special titles for premium seeds
   const title = `${rarityInfo.emoji} ${rarity} Item Updated!`;
   
-  // Get category and image URL
-  const category = getItemCategory(item.name);
-  const imageUrl = getBannerImageUrl(category);
-  
   notification.alert = {
     title: title,
     body: `${item.name} is now available (x${item.quantity})`
@@ -663,26 +648,22 @@ async function sendPremiumSeedNotification(deviceToken, item) {
     item_name: item.name,
     quantity: item.quantity,
     rarity: rarity,
-    category: category, // Use getItemCategory for banner image
-    image_url: imageUrl, // Add image URL for downloading
+    category: getItemCategory(item.name),
     type: 'premium_seed_stock_alert'
   };
   notification.badge = 1;
   notification.sound = getUserSoundPreference(deviceToken);
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
-  
-  // Enable rich media notifications with mutable-content
-  notification.mutableContent = 1;
 
-  console.log(`📨 DEBUG: Sending ${rarity} seed notification with banner to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+  console.log(`📨 DEBUG: Sending ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
 
   if (result.sent.length > 0) {
-    console.log(`✅ Sent ${rarity} seed notification with banner to ${deviceToken.substring(0, 10)}... for ${item.name}`);
+    console.log(`✅ Sent ${rarity} notification to ${deviceToken.substring(0, 10)}... for ${item.name}`);
   }
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send ${rarity} seed notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+    console.log(`❌ Failed to send ${rarity} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
     console.log(`❌ DEBUG: Full failure result:`, result.failed[0]);
   }
 }
@@ -698,13 +679,6 @@ function getCategoryInfo(category) {
   };
   
   return categoryMap[category] || categoryMap['unknown'];
-}
-
-// Get banner image URL for a category
-function getBannerImageUrl(category) {
-  const baseUrl = 'https://growagargen-server-04e191c11571.herokuapp.com/banners';
-  const categoryLower = category.toLowerCase();
-  return `${baseUrl}/${categoryLower}.png`;
 }
 
 // Auto-fetch stock data every 5 minutes
@@ -930,30 +904,24 @@ app.post('/api/test-notification', async (req, res) => {
       body: message || 'This is a test notification from your GrowAGarden server!'
     };
     
-    // Add category and image URL to payload for banner image
-    const imageUrl = category ? getBannerImageUrl(category) : null;
+    // Simple payload without image URLs
     notification.payload = {
-      category: category || 'Seeds', // Default to Seeds if no category provided
-      image_url: imageUrl, // Add image URL for downloading as fallback
+      category: category || 'Seeds',
       type: 'test_notification'
     };
     
     notification.badge = 1;
     notification.sound = getUserSoundPreference(device_token);
     notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
-    
-    // Enable rich media notifications with mutable-content
-    notification.mutableContent = 1;
 
     const result = await apnProvider.send(notification, [device_token]);
     
-    console.log(`📧 Test notification sent to ${device_token.substring(0, 10)}... with category: ${category || 'Seeds'} and image: ${imageUrl}`);
+    console.log(`📧 Test notification sent to ${device_token.substring(0, 10)}... with category: ${category || 'Seeds'}`);
     
     res.json({ 
       success: true, 
       message: 'Test notification sent',
       category: category || 'Seeds',
-      image_url: imageUrl,
       result: {
         sent: result.sent.length,
         failed: result.failed.length
