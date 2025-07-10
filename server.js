@@ -18,7 +18,7 @@ let previousStockItems = new Map(); // For change detection
 
 // Deduplication tracking
 let recentNotifications = new Map(); // device_token -> Map(category+items -> timestamp)
-const DEDUPLICATION_WINDOW = 30 * 1000; // 30 seconds
+const DEDUPLICATION_WINDOW = 5 * 60 * 1000; // 5 minutes (was 30 seconds)
 
 // APNs Provider - will be initialized when we have the key
 let apnProvider = null;
@@ -169,27 +169,28 @@ function createMockStockData() {
 }
 
 // Check for stock changes and send notifications
-async function checkStockChanges() {
+async function checkStockChanges(checkAvailability = false) {
   if (users.size === 0) {
     console.log('📵 No registered users - skipping stock change check');
     return;
   }
 
-  console.log('🔍 AUTOMATIC MONITORING DEBUG: Starting stock change check...');
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Previous stock items: ${previousStockItems.size}`);
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Current stock items: ${stockItems.size}`);
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Time: ${new Date().toISOString()}`);
+  const checkType = checkAvailability ? 'AVAILABILITY' : 'RESTOCK';
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Starting stock change check...`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Previous stock items: ${previousStockItems.size}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Current stock items: ${stockItems.size}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Time: ${new Date().toISOString()}`);
 
   // Get user favorites for debugging
   const userFavorites = [];
   for (const [deviceToken, userData] of users) {
     if (userData.favorite_items) {
-      console.log(`🔍 AUTOMATIC MONITORING DEBUG: User ${deviceToken.substring(0, 10)}... has favorites: ${userData.favorite_items.join(', ')}`);
+      console.log(`🔍 ${checkType} MONITORING DEBUG: User ${deviceToken.substring(0, 10)}... has favorites: ${userData.favorite_items.join(', ')}`);
       userFavorites.push(...userData.favorite_items);
     }
   }
   const uniqueFavorites = [...new Set(userFavorites)];
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: All user favorites: ${uniqueFavorites.join(', ')}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: All user favorites: ${uniqueFavorites.join(', ')}`);
 
   const restockedItems = [];
   const allChanges = [];
@@ -211,7 +212,7 @@ async function checkStockChanges() {
       allChanges.push(`${favoriteItem}: ${previousQuantity} → ${currentQuantity}`);
     }
     
-    console.log(`🔍 AUTOMATIC MONITORING DEBUG: ${favoriteItem}: ${previousQuantity} → ${currentQuantity} [${currentData?.category || 'not found'}] [${rarity} ${rarityInfo.emoji}]`);
+    console.log(`🔍 ${checkType} MONITORING DEBUG: ${favoriteItem}: ${previousQuantity} → ${currentQuantity} [${currentData?.category || 'not found'}] [${rarity} ${rarityInfo.emoji}]`);
     
     // NEW LOGIC: Check if item should send notifications (not Common rarity)
     if (!shouldSendNotificationForItem(favoriteItem)) {
@@ -219,9 +220,25 @@ async function checkStockChanges() {
       continue;
     }
     
-    // NEW LOGIC: Send notification for ANY quantity change (not just 0→positive)
-    if (currentQuantity !== previousQuantity && currentQuantity > 0) {
-      console.log(`🎯 STOCK CHANGE DETECTED: ${favoriteItem} changed from ${previousQuantity} → ${currentQuantity} - Adding to notification list`);
+    // MODIFIED LOGIC: Different conditions based on check type
+    let shouldNotify = false;
+    
+    if (checkAvailability) {
+      // Availability check: notify if item is currently in stock
+      shouldNotify = currentQuantity > 0;
+      if (shouldNotify) {
+        console.log(`🎯 AVAILABILITY CHECK: ${favoriteItem} is available (${currentQuantity}) - Adding to notification list`);
+      }
+    } else {
+      // Restock check: notify for ANY item in stock (not just quantity changes)
+      // This handles the scenario: user buys item, new identical item restocks
+      shouldNotify = currentQuantity > 0;
+      if (shouldNotify) {
+        console.log(`🎯 STOCK AVAILABLE: ${favoriteItem} is in stock (${currentQuantity}) - Adding to notification list`);
+      }
+    }
+    
+    if (shouldNotify) {
       const displayName = currentData.originalName || favoriteItem;
       restockedItems.push({ 
         name: displayName, 
@@ -231,18 +248,20 @@ async function checkStockChanges() {
         rarityEmoji: rarityInfo.emoji
       });
     } else if (currentQuantity === 0) {
-      console.log(`📉 AUTOMATIC MONITORING DEBUG: ${favoriteItem} went out of stock (${previousQuantity} → 0)`);
-    } else if (currentQuantity === previousQuantity) {
-      console.log(`💤 AUTOMATIC MONITORING DEBUG: ${favoriteItem} quantity unchanged (${currentQuantity})`);
+      console.log(`📉 ${checkType} MONITORING DEBUG: ${favoriteItem} went out of stock (${previousQuantity} → 0)`);
+    } else if (currentQuantity === previousQuantity && !checkAvailability) {
+      console.log(`💤 ${checkType} MONITORING DEBUG: ${favoriteItem} quantity unchanged (${currentQuantity})`);
+    } else if (!shouldNotify && checkAvailability) {
+      console.log(`📉 ${checkType} MONITORING DEBUG: ${favoriteItem} out of stock (${currentQuantity})`);
     }
   }
 
   // Log ALL stock changes for debugging
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Total favorite item changes detected: ${allChanges.length}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Total favorite item changes detected: ${allChanges.length}`);
   if (allChanges.length > 0) {
-    console.log(`🔍 AUTOMATIC MONITORING DEBUG: Changes: ${allChanges.join(', ')}`);
+    console.log(`🔍 ${checkType} MONITORING DEBUG: Changes: ${allChanges.join(', ')}`);
   } else {
-    console.log(`🔍 AUTOMATIC MONITORING DEBUG: No changes in favorite items - stock API might be returning identical data`);
+    console.log(`🔍 ${checkType} MONITORING DEBUG: No changes in favorite items - stock API might be returning identical data`);
   }
 
   // Also check all other items for debugging
@@ -260,25 +279,25 @@ async function checkStockChanges() {
     if (previousQuantity === 0 && currentQuantity > 0) {
       totalTransitions++;
       if (!uniqueFavorites.includes(itemName)) {
-        console.log(`🔔 AUTOMATIC MONITORING DEBUG: Non-favorite ${itemName} back in stock: ${previousQuantity} → ${currentQuantity}`);
+        console.log(`🔔 ${checkType} MONITORING DEBUG: Non-favorite ${itemName} back in stock: ${previousQuantity} → ${currentQuantity}`);
       }
     }
   }
 
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Total items with ANY quantity changes: ${anyItemChanges}`);
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Total 0→positive transitions detected: ${totalTransitions}`);
-  console.log(`🔍 AUTOMATIC MONITORING DEBUG: Favorited items that restocked: ${restockedItems.length}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Total items with ANY quantity changes: ${anyItemChanges}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Total 0→positive transitions detected: ${totalTransitions}`);
+  console.log(`🔍 ${checkType} MONITORING DEBUG: Favorited items that ${checkAvailability ? 'are available' : 'restocked'}: ${restockedItems.length}`);
 
-  if (anyItemChanges === 0) {
-    console.log(`⚠️ AUTOMATIC MONITORING DEBUG: No stock changes detected - API might be returning cached/identical data`);
+  if (anyItemChanges === 0 && !checkAvailability) {
+    console.log(`⚠️ ${checkType} MONITORING DEBUG: No stock changes detected - API might be returning cached/identical data`);
   }
 
   if (restockedItems.length > 0) {
-    console.log(`📬 Found ${restockedItems.length} restocked favorited items, sending notifications...`);
-    console.log(`📬 AUTOMATIC MONITORING DEBUG: Restocked items: ${restockedItems.map(item => item.name).join(', ')}`);
+    console.log(`📬 Found ${restockedItems.length} ${checkAvailability ? 'available' : 'restocked'} favorited items, sending notifications...`);
+    console.log(`📬 ${checkType} MONITORING DEBUG: ${checkAvailability ? 'Available' : 'Restocked'} items: ${restockedItems.map(item => item.name).join(', ')}`);
     await sendStockNotifications(restockedItems);
   } else {
-    console.log(`📵 AUTOMATIC MONITORING DEBUG: No favorited items restocked - no notifications sent`);
+    console.log(`📵 ${checkType} MONITORING DEBUG: No favorited items ${checkAvailability ? 'available' : 'restocked'} - no notifications sent`);
   }
 }
 
@@ -732,16 +751,22 @@ async function sendCategoryNotification(deviceToken, category, items) {
   notification.category = `STOCK_ALERT_${categoryName.toUpperCase()}`;
 
   console.log(`📨 NEW UX: Sending ${categoryName} notification to ${deviceToken.substring(0, 10)}... for items: ${items.map(item => item.name).join(', ')}`);
+  console.log(`🔍 DEBUG: APNs Environment: ${process.env.APNS_PRODUCTION === 'true' ? 'Production' : 'Development'}`);
+  console.log(`🔍 DEBUG: Bundle ID: ${notification.topic}`);
+  console.log(`🔍 DEBUG: Device Token: ${deviceToken.substring(0, 20)}...`);
 
   const result = await apnProvider.send(notification, [deviceToken]);
   
   if (result.sent.length > 0) {
     console.log(`✅ Sent modern ${categoryName} notification to ${deviceToken.substring(0, 10)}... for ${items.length} items`);
+    console.log(`✅ APNs Response: Sent successfully to ${result.sent.length} devices`);
   }
   
   if (result.failed.length > 0) {
     console.log(`❌ Failed to send ${categoryName} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
-    console.log(`❌ DEBUG: Full failure result:`, result.failed[0]);
+    console.log(`❌ DEBUG: Full failure result:`, JSON.stringify(result.failed[0], null, 2));
+    console.log(`❌ DEBUG: Error status: ${result.failed[0].status}`);
+    console.log(`❌ DEBUG: Error response: ${result.failed[0].response}`);
   }
 }
 
@@ -812,7 +837,7 @@ async function updateStockData() {
     stockItems = newStockData;
     
     // Check for stock changes and send notifications
-    await checkStockChanges();
+    await checkStockChanges(); // false = restock mode with modified logic
     
     console.log(`📊 Stock update complete - tracking ${stockItems.size} items`);
     
@@ -961,6 +986,35 @@ app.post('/api/refresh-stock', async (req, res) => {
   }
 });
 
+// Debug: manually trigger availability check
+app.post('/api/check-availability', async (req, res) => {
+  try {
+    const { api_secret } = req.body;
+    
+    // Simple API secret check
+    const expectedSecret = process.env.API_SECRET || 'growagargen-secret-2025';
+    if (api_secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    console.log('🔍 DEBUG: Manually triggering availability check...');
+    
+    // Use availability check mode - will notify for all items currently in stock
+    await checkStockChanges(true);
+    
+    res.json({
+      success: true,
+      message: 'Availability check triggered - notifications sent for items currently in stock',
+      stock_items: stockItems.size,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Debug availability check error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Debug: manually trigger automatic monitoring check
 app.post('/api/debug-automatic-monitoring', async (req, res) => {
   try {
@@ -1028,15 +1082,34 @@ app.post('/api/test-notification', async (req, res) => {
     const result = await apnProvider.send(notification, [device_token]);
     
     console.log(`📧 NEW UX: Test notification sent to ${device_token.substring(0, 10)}... with example format`);
+    console.log(`🔍 DEBUG: APNs Environment: ${process.env.APNS_PRODUCTION === 'true' ? 'Production' : 'Development'}`);
+    console.log(`🔍 DEBUG: Bundle ID: ${notification.topic}`);
+    console.log(`🔍 DEBUG: Device Token: ${device_token.substring(0, 20)}...`);
+    console.log(`🔍 DEBUG: Notification Title: ${notification.alert.title}`);
+    console.log(`🔍 DEBUG: Notification Body: ${notification.alert.body}`);
+    
+    if (result.sent.length > 0) {
+      console.log(`✅ APNs confirms: Test notification delivered to ${result.sent.length} devices`);
+    }
+    
+    if (result.failed.length > 0) {
+      console.log(`❌ APNs failed to deliver test notification: ${result.failed[0].error}`);
+      console.log(`❌ DEBUG: Full test failure result:`, JSON.stringify(result.failed[0], null, 2));
+      console.log(`❌ DEBUG: Error status: ${result.failed[0].status}`);
+      console.log(`❌ DEBUG: Error response: ${result.failed[0].response}`);
+    }
     
     res.json({ 
       success: true, 
       message: 'Test notification sent with new UX format',
       example_format: 'x15 Bamboo 🎋',
       category: category || 'Seeds',
+      apns_environment: process.env.APNS_PRODUCTION === 'true' ? 'Production' : 'Development',
+      bundle_id: notification.topic,
       result: {
         sent: result.sent.length,
-        failed: result.failed.length
+        failed: result.failed.length,
+        failed_details: result.failed.length > 0 ? result.failed[0].error : null
       }
     });
     
@@ -1143,7 +1216,7 @@ app.post('/api/clear-notification-cache', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 GrowAGarden server running on port ${PORT}`);
+  console.log(`🚀 GAG Stocks server running on port ${PORT}`);
   console.log(`📱 APNs ready: ${!!apnProvider}`);
   console.log(`🔗 Monitoring stock from: ${STOCK_API_URL}`);
   console.log(`🔑 Team ID: ${process.env.APNS_TEAM_ID || '8U376J9B6U'}`);
