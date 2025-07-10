@@ -1088,18 +1088,7 @@ app.post('/api/test-notification', async (req, res) => {
     console.log(`🔍 DEBUG: Notification Title: ${notification.alert.title}`);
     console.log(`🔍 DEBUG: Notification Body: ${notification.alert.body}`);
     
-    if (result.sent.length > 0) {
-      console.log(`✅ APNs confirms: Test notification delivered to ${result.sent.length} devices`);
-    }
-    
-    if (result.failed.length > 0) {
-      console.log(`❌ APNs failed to deliver test notification: ${result.failed[0].error}`);
-      console.log(`❌ DEBUG: Full test failure result:`, JSON.stringify(result.failed[0], null, 2));
-      console.log(`❌ DEBUG: Error status: ${result.failed[0].status}`);
-      console.log(`❌ DEBUG: Error response: ${result.failed[0].response}`);
-    }
-    
-    res.json({ 
+    let responseData = {
       success: true, 
       message: 'Test notification sent with new UX format',
       example_format: 'x15 Bamboo 🎋',
@@ -1107,11 +1096,31 @@ app.post('/api/test-notification', async (req, res) => {
       apns_environment: process.env.APNS_PRODUCTION === 'true' ? 'Production' : 'Development',
       bundle_id: notification.topic,
       result: {
-        sent: result.sent.length,
-        failed: result.failed.length,
-        failed_details: result.failed.length > 0 ? result.failed[0].error : null
+        sent: 0,
+        failed: 0,
+        failed_details: null
       }
-    });
+    };
+    
+    if (result && result.sent && result.sent.length > 0) {
+      console.log(`✅ APNs confirms: Test notification delivered to ${result.sent.length} devices`);
+      responseData.result.sent = result.sent.length;
+    }
+    
+    if (result && result.failed && result.failed.length > 0) {
+      console.log(`❌ APNs failed to deliver test notification: ${result.failed[0].error || 'Unknown error'}`);
+      console.log(`❌ DEBUG: Full test failure result:`, JSON.stringify(result.failed[0], null, 2));
+      if (result.failed[0].status) {
+        console.log(`❌ DEBUG: Error status: ${result.failed[0].status}`);
+      }
+      if (result.failed[0].response) {
+        console.log(`❌ DEBUG: Error response: ${result.failed[0].response}`);
+      }
+      responseData.result.failed = result.failed.length;
+      responseData.result.failed_details = result.failed[0].error || 'Unknown APNs error';
+    }
+    
+    res.json(responseData);
     
   } catch (error) {
     console.error('❌ Test notification error:', error);
