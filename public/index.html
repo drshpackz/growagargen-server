@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GrowAGarden Notification Server</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            text-align: center;
+        }
+        .banner {
+            width: 400px;
+            height: 200px;
+            margin: 20px auto;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        .seeds-banner {
+            background: linear-gradient(135deg, #4CAF50, #66BB6A);
+        }
+        .gear-banner {
+            background: linear-gradient(135deg, #607D8B, #78909C);
+        }
+        .eggs-banner {
+            background: linear-gradient(135deg, #FF9800, #FFB74D);
+        }
+        .emoji {
+            font-size: 60px;
+            margin-right: 20px;
+        }
+        .status {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 30px 0;
+        }
+        .endpoint {
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌱 GrowAGarden Notification Server</h1>
+        <p>Push notification service for stock updates</p>
+        
+        <div class="status">
+            <h2>📊 Server Status</h2>
+            <div id="status-info">Loading...</div>
+        </div>
+        
+        <h2>🖼️ Notification Banners</h2>
+        <p>These images are used for rich push notifications:</p>
+        
+        <div class="banner seeds-banner" id="seeds-banner">
+            <span class="emoji">🌱</span>
+            <span>Seeds Updated!</span>
+        </div>
+        
+        <div class="banner gear-banner" id="gear-banner">
+            <span class="emoji">⚙️</span>
+            <span>Gear Updated!</span>
+        </div>
+        
+        <div class="banner eggs-banner" id="eggs-banner">
+            <span class="emoji">🥚</span>
+            <span>Eggs Updated!</span>
+        </div>
+        
+        <h2>🔗 API Endpoints</h2>
+        <div class="endpoint">GET /api/banners/seeds.png</div>
+        <div class="endpoint">GET /api/banners/gear.png</div>
+        <div class="endpoint">GET /api/banners/eggs.png</div>
+        <div class="endpoint">POST /api/register-device</div>
+        <div class="endpoint">POST /api/test-notification</div>
+        
+        <p style="margin-top: 40px; opacity: 0.7;">
+            Banner URLs for notifications:<br>
+            <code>https://growagargen-server-04e191c11571.herokuapp.com/api/banners/{category}.png</code>
+        </p>
+    </div>
+
+    <script>
+        // Load server status
+        fetch('/api/stats')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('status-info').innerHTML = `
+                    <p>✅ Server Online: ${data.apns_configured ? 'APNs Ready' : 'APNs Not Configured'}</p>
+                    <p>👥 Registered Users: ${data.total_users}</p>
+                    <p>📦 Stock Items: ${data.stock_items}</p>
+                    <p>⏰ Last Updated: ${new Date(data.server_time).toLocaleString()}</p>
+                `;
+            })
+            .catch(error => {
+                document.getElementById('status-info').innerHTML = '<p>❌ Error loading status</p>';
+            });
+    </script>
+</body>
+</html> 
