@@ -1390,6 +1390,150 @@ function calculateOptimizedCountdown(utcNow, interval, type) {
   };
 }
 
+// MARK: - Message System Endpoints
+
+// Get app messages (issue alerts and basic announcements)
+app.get('/api/messages', (req, res) => {
+  try {
+    const messages = [];
+    
+    // Check for issue alert message
+    const issueAlert = process.env.issue_alert_message || '';
+    if (issueAlert.trim()) {
+      messages.push({
+        id: 'issue_alert',
+        type: 'issue',
+        title: 'Service Alert',
+        message: issueAlert.trim(),
+        severity: 'high',
+        icon: 'exclamationmark.triangle.fill',
+        color: 'red',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Check for basic message
+    const basicMessage = process.env.basic_message || '';
+    if (basicMessage.trim()) {
+      messages.push({
+        id: 'basic_announcement',
+        type: 'announcement',
+        title: 'Announcement',
+        message: basicMessage.trim(),
+        severity: 'normal',
+        icon: 'megaphone.fill',
+        color: 'blue',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    console.log(`📢 Messages endpoint called - returning ${messages.length} messages`);
+    
+    res.json({
+      success: true,
+      messages: messages,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching messages:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch messages',
+      messages: []
+    });
+  }
+});
+
+// Version check endpoint
+app.get('/api/version-check', (req, res) => {
+  try {
+    const userVersion = req.query.version || req.headers['app-version'] || '1.0';
+    
+    // Get version settings from environment variables
+    const currentVersion = process.env.current_version || '1.2';
+    const oldVersions = (process.env.old_versions || '1.0,1.1').split(',').map(v => v.trim());
+    
+    console.log(`📱 Version check: User=${userVersion}, Current=${currentVersion}, Old=${oldVersions.join(',')}`);
+    
+    // Check if user version is current
+    const isCurrentVersion = userVersion === currentVersion;
+    const isOldVersion = oldVersions.includes(userVersion);
+    const needsUpdate = !isCurrentVersion;
+    
+    const response = {
+      success: true,
+      user_version: userVersion,
+      current_version: currentVersion,
+      is_current: isCurrentVersion,
+      is_old_version: isOldVersion,
+      needs_update: needsUpdate,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Add update message if needed
+    if (needsUpdate) {
+      response.update_message = {
+        id: 'version_update',
+        type: 'update',
+        title: 'Update Available',
+        message: `Please update to the latest version (${currentVersion}) for the best experience and latest features.`,
+        severity: isOldVersion ? 'high' : 'normal',
+        icon: 'arrow.down.circle.fill',
+        color: isOldVersion ? 'orange' : 'blue',
+        action_text: 'Update Now',
+        action_url: 'https://apps.apple.com/app/id123456789' // Replace with actual App Store URL
+      };
+    }
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error('❌ Error checking version:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check version',
+      user_version: req.query.version || '1.0',
+      current_version: '1.2',
+      needs_update: false
+    });
+  }
+});
+
+// Test message endpoint (for debugging)
+app.post('/api/test-message', (req, res) => {
+  try {
+    const { type, message } = req.body;
+    
+    console.log(`🧪 Test message requested: ${type} - ${message}`);
+    
+    // Create test response
+    const testMessage = {
+      id: `test_${type}_${Date.now()}`,
+      type: type || 'announcement',
+      title: type === 'issue' ? 'Test Alert' : 'Test Announcement',
+      message: message || 'This is a test message',
+      severity: type === 'issue' ? 'high' : 'normal',
+      icon: type === 'issue' ? 'exclamationmark.triangle.fill' : 'megaphone.fill',
+      color: type === 'issue' ? 'red' : 'blue',
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json({
+      success: true,
+      test_message: testMessage,
+      note: 'This is a test message and not from environment variables'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating test message:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create test message'
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 GAG Stocks server running on port ${PORT}`);
@@ -1397,4 +1541,14 @@ app.listen(PORT, () => {
   console.log(`🔗 Monitoring stock from: ${STOCK_API_URL}`);
   console.log(`🔑 Team ID: ${process.env.APNS_TEAM_ID || '8U376J9B6U'}`);
   console.log(`🆔 Key ID: ${process.env.APNS_KEY_ID || 'F9J436633X'}`);
+  
+  // Log message system configuration
+  const issueAlert = process.env.issue_alert_message || '';
+  const basicMessage = process.env.basic_message || '';
+  const currentVersion = process.env.current_version || '1.2';
+  
+  console.log(`📢 Message system ready:`);
+  console.log(`   Issue alert: ${issueAlert ? 'SET' : 'not set'}`);
+  console.log(`   Basic message: ${basicMessage ? 'SET' : 'not set'}`);
+  console.log(`   Current version: ${currentVersion}`);
 }); 
