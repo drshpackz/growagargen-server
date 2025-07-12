@@ -254,18 +254,28 @@ function processStockData(apiResponse) {
   if (apiResponse.egg_stock && Array.isArray(apiResponse.egg_stock)) {
     for (const item of apiResponse.egg_stock) {
       if (item.display_name && !item.display_name.toLowerCase().includes('location')) {
-        const itemData = {
-          quantity: item.quantity || 0,
-          category: 'eggs',
-          itemId: item.item_id,
-          displayName: item.display_name,
-          originalName: item.display_name,
-          icon: item.icon,
-          startDate: item.start_date_unix,
-          endDate: item.end_date_unix
-        };
+        // Check if this egg type already exists
+        const existingEgg = processedItems.get(item.display_name);
         
-        processedItems.set(item.display_name, itemData);
+        if (existingEgg) {
+          // Aggregate quantities for duplicate egg types
+          existingEgg.quantity += (item.quantity || 0);
+          console.log(`🥚 Aggregated ${item.display_name}: ${existingEgg.quantity} total`);
+        } else {
+          // New egg type
+          const itemData = {
+            quantity: item.quantity || 0,
+            category: 'eggs',
+            itemId: item.item_id,
+            displayName: item.display_name,
+            originalName: item.display_name,
+            icon: item.icon,
+            startDate: item.start_date_unix,
+            endDate: item.end_date_unix
+          };
+          
+          processedItems.set(item.display_name, itemData);
+        }
       }
     }
   }
