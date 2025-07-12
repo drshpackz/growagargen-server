@@ -147,8 +147,27 @@ function processStockData(apiResponse) {
   
   if (!apiResponse) {
     console.log('⚠️ Invalid API response');
-    return processedItems;
+    return createCompleteItemCatalog(new Map());
   }
+
+  // Define complete item catalogs for all categories
+  const allPossibleSeeds = [
+    "Carrot", "Strawberry", "Blueberry", "Orange Tulip", "Tomato", "Corn", "Daffodil", 
+    "Watermelon", "Pumpkin", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit", 
+    "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Ember Lily", 
+    "Sugar Apple", "Burning Bud", "Avocado"
+  ];
+
+  const allPossibleGear = [
+    "Watering Can", "Trowel", "Recall Wrench", "Basic Sprinkler", "Advanced Sprinkler", 
+    "Godly Sprinkler", "Magnifying Glass", "Tanning Mirror", "Master Sprinkler", 
+    "Cleaning Spray", "Favorite Tool", "Harvest Tool", "Friendship Pot"
+  ];
+
+  const allPossibleEggs = [
+    "Common Egg", "Uncommon Egg", "Rare Egg", "Legendary Egg", "Bee Egg", "Bug Egg", 
+    "Common Summer Egg", "Rare Summer Egg", "Paradise Summer Egg", "Paradise Egg"
+  ];
 
   // Process seeds from v2 API
   if (apiResponse.seed_stock && Array.isArray(apiResponse.seed_stock)) {
@@ -163,8 +182,22 @@ function processStockData(apiResponse) {
         endDate: item.end_date_unix
       };
       
-      // Use display_name as the key for backwards compatibility
       processedItems.set(item.display_name, itemData);
+    }
+  }
+
+  // Add all possible seeds that weren't in the API response (out of stock)
+  for (const seedName of allPossibleSeeds) {
+    if (!processedItems.has(seedName)) {
+      processedItems.set(seedName, {
+        quantity: 0,
+        category: 'seeds',
+        itemId: null,
+        displayName: seedName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
     }
   }
 
@@ -185,6 +218,21 @@ function processStockData(apiResponse) {
     }
   }
 
+  // Add all possible gear that wasn't in the API response (out of stock)
+  for (const gearName of allPossibleGear) {
+    if (!processedItems.has(gearName)) {
+      processedItems.set(gearName, {
+        quantity: 0,
+        category: 'gear',
+        itemId: null,
+        displayName: gearName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
+    }
+  }
+
   // Process cosmetic from v2 API
   if (apiResponse.cosmetic_stock && Array.isArray(apiResponse.cosmetic_stock)) {
     for (const item of apiResponse.cosmetic_stock) {
@@ -202,32 +250,121 @@ function processStockData(apiResponse) {
     }
   }
 
-  // Process eggs from v2 API (keep individual item approach for notification granularity)
+  // Process eggs from v2 API - FIXED: Return proper quantities instead of individual items
   if (apiResponse.egg_stock && Array.isArray(apiResponse.egg_stock)) {
     for (const item of apiResponse.egg_stock) {
       if (item.display_name && !item.display_name.toLowerCase().includes('location')) {
-        // Create individual egg items for precise notifications
-        for (let i = 0; i < item.quantity; i++) {
-          const eggKey = `${item.display_name}_${i + 1}`;
-          const itemData = {
-            quantity: 1,
-            category: 'eggs',
-            itemId: item.item_id,
-            displayName: item.display_name,
-            originalName: item.display_name,
-            icon: item.icon,
-            startDate: item.start_date_unix,
-            endDate: item.end_date_unix
-          };
-          
-          processedItems.set(eggKey, itemData);
-        }
+        const itemData = {
+          quantity: item.quantity || 0,
+          category: 'eggs',
+          itemId: item.item_id,
+          displayName: item.display_name,
+          originalName: item.display_name,
+          icon: item.icon,
+          startDate: item.start_date_unix,
+          endDate: item.end_date_unix
+        };
+        
+        processedItems.set(item.display_name, itemData);
       }
     }
   }
 
-  console.log(`📊 Processed ${processedItems.size} stock items from v2 API`);
+  // Add all possible eggs that weren't in the API response (out of stock)
+  for (const eggName of allPossibleEggs) {
+    if (!processedItems.has(eggName)) {
+      processedItems.set(eggName, {
+        quantity: 0,
+        category: 'eggs',
+        itemId: null,
+        displayName: eggName,
+        originalName: eggName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
+    }
+  }
+
+  console.log(`📊 Processed ${processedItems.size} total items from v2 API (including out-of-stock)`);
+  console.log(`📊 Breakdown: ${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic`);
+  
   return processedItems;
+}
+
+// Helper function to create complete item catalog when API fails
+function createCompleteItemCatalog(existingItems) {
+  const completeItems = new Map(existingItems);
+  
+  // All possible seeds
+  const allSeeds = [
+    "Carrot", "Strawberry", "Blueberry", "Orange Tulip", "Tomato", "Corn", "Daffodil", 
+    "Watermelon", "Pumpkin", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit", 
+    "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Ember Lily", 
+    "Sugar Apple", "Burning Bud", "Avocado"
+  ];
+
+  // All possible gear
+  const allGear = [
+    "Watering Can", "Trowel", "Recall Wrench", "Basic Sprinkler", "Advanced Sprinkler", 
+    "Godly Sprinkler", "Magnifying Glass", "Tanning Mirror", "Master Sprinkler", 
+    "Cleaning Spray", "Favorite Tool", "Harvest Tool", "Friendship Pot"
+  ];
+
+  // All possible eggs
+  const allEggs = [
+    "Common Egg", "Uncommon Egg", "Rare Egg", "Legendary Egg", "Bee Egg", "Bug Egg", 
+    "Common Summer Egg", "Rare Summer Egg", "Paradise Summer Egg", "Paradise Egg"
+  ];
+
+  // Add missing seeds
+  for (const seedName of allSeeds) {
+    if (!completeItems.has(seedName)) {
+      completeItems.set(seedName, {
+        quantity: 0,
+        category: 'seeds',
+        itemId: null,
+        displayName: seedName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
+    }
+  }
+
+  // Add missing gear
+  for (const gearName of allGear) {
+    if (!completeItems.has(gearName)) {
+      completeItems.set(gearName, {
+        quantity: 0,
+        category: 'gear',
+        itemId: null,
+        displayName: gearName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
+    }
+  }
+
+  // Add missing eggs
+  for (const eggName of allEggs) {
+    if (!completeItems.has(eggName)) {
+      completeItems.set(eggName, {
+        quantity: 0,
+        category: 'eggs',
+        itemId: null,
+        displayName: eggName,
+        originalName: eggName,
+        icon: null,
+        startDate: null,
+        endDate: null
+      });
+    }
+  }
+
+  console.log(`📊 Complete catalog created with ${completeItems.size} total items`);
+  return completeItems;
 }
 
 // Process weather data from v2 API
@@ -261,17 +398,71 @@ function processWeatherData(apiResponse) {
 function createMockStockData() {
   const mockItems = new Map();
   
-  // Mock seeds data
+  // Mock seeds data with some realistic quantities
   const mockSeeds = {
-    "Apple": 3, "Avocado": 2, "Bamboo": 8, "Beanstalk": 1, "Blueberry": 7,
-    "Burning Bud": 2, "Cacao": 4, "Carrot": 12, "Coconut": 3, "Daffodil": 6
+    "Carrot": 12, "Strawberry": 9, "Blueberry": 7, "Orange Tulip": 8, "Tomato": 5, 
+    "Corn": 6, "Daffodil": 6, "Watermelon": 6, "Pumpkin": 4, "Apple": 3, 
+    "Bamboo": 8, "Coconut": 3, "Cactus": 2, "Dragon Fruit": 1, "Mango": 4, 
+    "Grape": 5, "Mushroom": 2, "Pepper": 3, "Cacao": 4, "Beanstalk": 1, 
+    "Ember Lily": 2, "Sugar Apple": 3, "Burning Bud": 2, "Avocado": 2
   };
   
+  // Mock gear data
+  const mockGear = {
+    "Watering Can": 4, "Trowel": 2, "Recall Wrench": 1, "Basic Sprinkler": 2, 
+    "Advanced Sprinkler": 1, "Godly Sprinkler": 0, "Magnifying Glass": 1, 
+    "Tanning Mirror": 0, "Master Sprinkler": 0, "Cleaning Spray": 3, 
+    "Favorite Tool": 0, "Harvest Tool": 0, "Friendship Pot": 0
+  };
+  
+  // Mock eggs data
+  const mockEggs = {
+    "Common Egg": 5, "Uncommon Egg": 3, "Rare Egg": 1, "Legendary Egg": 1, 
+    "Bee Egg": 3, "Bug Egg": 2, "Common Summer Egg": 4, "Rare Summer Egg": 1, 
+    "Paradise Summer Egg": 0, "Paradise Egg": 1
+  };
+  
+  // Add all seeds (with mock quantities)
   for (const [name, quantity] of Object.entries(mockSeeds)) {
-    mockItems.set(name, { quantity, category: 'seeds' });
+    mockItems.set(name, { 
+      quantity, 
+      category: 'seeds',
+      itemId: null,
+      displayName: name,
+      icon: null,
+      startDate: null,
+      endDate: null
+    });
+  }
+  
+  // Add all gear (with mock quantities)
+  for (const [name, quantity] of Object.entries(mockGear)) {
+    mockItems.set(name, { 
+      quantity, 
+      category: 'gear',
+      itemId: null,
+      displayName: name,
+      icon: null,
+      startDate: null,
+      endDate: null
+    });
+  }
+  
+  // Add all eggs (with mock quantities)
+  for (const [name, quantity] of Object.entries(mockEggs)) {
+    mockItems.set(name, { 
+      quantity, 
+      category: 'eggs',
+      itemId: null,
+      displayName: name,
+      originalName: name,
+      icon: null,
+      startDate: null,
+      endDate: null
+    });
   }
 
-  console.log('📊 Using mock stock data');
+  console.log(`📊 Mock data created with ${mockItems.size} total items (including out-of-stock)`);
   return mockItems;
 }
 
