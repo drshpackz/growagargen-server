@@ -23,8 +23,14 @@ const DEDUPLICATION_WINDOW = 5 * 60 * 1000; // 5 minutes (was 30 seconds)
 // APNs Provider - will be initialized when we have the key
 let apnProvider = null;
 
-// Real API endpoint (same as iOS app)
-const STOCK_API_URL = 'https://www.gamersberg.com/api/grow-a-garden/stock';
+// Weather data storage
+let weatherData = new Map(); // weather_id -> weather data
+let previousWeatherData = new Map(); // For change detection
+
+// New v2 API endpoints
+const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
+const WEATHER_API_URL = 'https://api.joshlei.com/v2/growagarden/weather';
+const ITEM_INFO_API_URL = 'https://api.joshlei.com/v2/growagarden/info';
 
 // Initialize APNs provider
 function initializeAPNs() {
@@ -48,19 +54,22 @@ function initializeAPNs() {
   }
 }
 
-// Fetch real stock data from the same API as iOS app
+// Fetch real stock data from the v2 API
 async function fetchRealStockData() {
   try {
-    console.log('🔄 Fetching real stock data from API...');
+    console.log('🔄 Fetching stock data from v2 API...');
+    
+    const apiKey = process.env.JSTUDIO_API_KEY;
+    if (!apiKey) {
+      console.log('⚠️ No API key configured, using mock data');
+      return createMockStockData();
+    }
     
     const response = await fetch(STOCK_API_URL, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Referer': 'https://www.gamersberg.com/grow-a-garden/stock',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin'
+        'jstudio-key': apiKey,
+        'Accept': 'application/json',
+        'User-Agent': 'GrowAGarden-StockBot/1.0'
       }
     });
 
@@ -81,11 +90,11 @@ async function fetchRealStockData() {
     }
 
     const data = await response.json();
-    console.log('✅ Successfully fetched real stock data');
+    console.log('✅ Successfully fetched v2 stock data');
     return processStockData(data);
     
   } catch (error) {
-    console.error('❌ Error fetching real stock data:', error.message);
+    console.error('❌ Error fetching v2 stock data:', error.message);
     
     // Preserve existing stock data instead of falling back to mock
     if (stockItems.size > 0) {
@@ -98,56 +107,154 @@ async function fetchRealStockData() {
   }
 }
 
-// Process stock data into our format
+// Fetch weather data from the v2 API
+async function fetchWeatherData() {
+  try {
+    console.log('🌦️ Fetching weather data from v2 API...');
+    
+    const apiKey = process.env.JSTUDIO_API_KEY;
+    if (!apiKey) {
+      console.log('⚠️ No API key configured, skipping weather data');
+      return new Map();
+    }
+    
+    const response = await fetch(WEATHER_API_URL, {
+      headers: {
+        'jstudio-key': apiKey,
+        'Accept': 'application/json',
+        'User-Agent': 'GrowAGarden-StockBot/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      console.log(`⚠️ Weather API returned ${response.status}, skipping weather data`);
+      return new Map();
+    }
+
+    const data = await response.json();
+    console.log('✅ Successfully fetched weather data');
+    return processWeatherData(data);
+    
+  } catch (error) {
+    console.error('❌ Error fetching weather data:', error.message);
+    return new Map();
+  }
+}
+
+// Process stock data from v2 API into our format
 function processStockData(apiResponse) {
   const processedItems = new Map();
   
-  if (!apiResponse.data || !apiResponse.data[0]) {
-    console.log('⚠️ Invalid API response structure');
+  if (!apiResponse) {
+    console.log('⚠️ Invalid API response');
     return processedItems;
   }
 
-  const stockData = apiResponse.data[0];
-
-  // Process seeds
-  if (stockData.seeds) {
-    for (const [name, quantityString] of Object.entries(stockData.seeds)) {
-      const quantity = parseInt(quantityString) || 0;
-      processedItems.set(name, { quantity, category: 'seeds' });
+  // Process seeds from v2 API
+  if (apiResponse.seed_stock && Array.isArray(apiResponse.seed_stock)) {
+    for (const item of apiResponse.seed_stock) {
+      const itemData = {
+        quantity: item.quantity || 0,
+        category: 'seeds',
+        itemId: item.item_id,
+        displayName: item.display_name,
+        icon: item.icon,
+        startDate: item.start_date_unix,
+        endDate: item.end_date_unix
+      };
+      
+      // Use display_name as the key for backwards compatibility
+      processedItems.set(item.display_name, itemData);
     }
   }
 
-  // Process gear
-  if (stockData.gear) {
-    for (const [name, quantityString] of Object.entries(stockData.gear)) {
-      const quantity = parseInt(quantityString) || 0;
-      processedItems.set(name, { quantity, category: 'gear' });
+  // Process gear from v2 API
+  if (apiResponse.gear_stock && Array.isArray(apiResponse.gear_stock)) {
+    for (const item of apiResponse.gear_stock) {
+      const itemData = {
+        quantity: item.quantity || 0,
+        category: 'gear',
+        itemId: item.item_id,
+        displayName: item.display_name,
+        icon: item.icon,
+        startDate: item.start_date_unix,
+        endDate: item.end_date_unix
+      };
+      
+      processedItems.set(item.display_name, itemData);
     }
   }
 
-  // Process cosmetic
-  if (stockData.cosmetic) {
-    for (const [name, quantityString] of Object.entries(stockData.cosmetic)) {
-      const quantity = parseInt(quantityString) || 0;
-      processedItems.set(name, { quantity, category: 'cosmetic' });
+  // Process cosmetic from v2 API
+  if (apiResponse.cosmetic_stock && Array.isArray(apiResponse.cosmetic_stock)) {
+    for (const item of apiResponse.cosmetic_stock) {
+      const itemData = {
+        quantity: item.quantity || 0,
+        category: 'cosmetic',
+        itemId: item.item_id,
+        displayName: item.display_name,
+        icon: item.icon,
+        startDate: item.start_date_unix,
+        endDate: item.end_date_unix
+      };
+      
+      processedItems.set(item.display_name, itemData);
     }
   }
 
-  // Process eggs (individual items, skip "Location")
-  if (stockData.eggs && Array.isArray(stockData.eggs)) {
-    for (const egg of stockData.eggs) {
-      if (egg.name && !egg.name.toLowerCase().includes('location')) {
-        // Create individual egg items
-        for (let i = 0; i < egg.quantity; i++) {
-          const eggKey = `${egg.name}_${i + 1}`;
-          processedItems.set(eggKey, { quantity: 1, category: 'eggs', originalName: egg.name });
+  // Process eggs from v2 API (keep individual item approach for notification granularity)
+  if (apiResponse.egg_stock && Array.isArray(apiResponse.egg_stock)) {
+    for (const item of apiResponse.egg_stock) {
+      if (item.display_name && !item.display_name.toLowerCase().includes('location')) {
+        // Create individual egg items for precise notifications
+        for (let i = 0; i < item.quantity; i++) {
+          const eggKey = `${item.display_name}_${i + 1}`;
+          const itemData = {
+            quantity: 1,
+            category: 'eggs',
+            itemId: item.item_id,
+            displayName: item.display_name,
+            originalName: item.display_name,
+            icon: item.icon,
+            startDate: item.start_date_unix,
+            endDate: item.end_date_unix
+          };
+          
+          processedItems.set(eggKey, itemData);
         }
       }
     }
   }
 
-  console.log(`📊 Processed ${processedItems.size} stock items`);
+  console.log(`📊 Processed ${processedItems.size} stock items from v2 API`);
   return processedItems;
+}
+
+// Process weather data from v2 API
+function processWeatherData(apiResponse) {
+  const processedWeather = new Map();
+  
+  if (!apiResponse || !apiResponse.weather || !Array.isArray(apiResponse.weather)) {
+    console.log('⚠️ No weather data in API response');
+    return processedWeather;
+  }
+
+  for (const weather of apiResponse.weather) {
+    const weatherData = {
+      weatherId: weather.weather_id,
+      weatherName: weather.weather_name,
+      active: weather.active,
+      duration: weather.duration,
+      startDuration: weather.start_duration_unix,
+      endDuration: weather.end_duration_unix,
+      icon: weather.icon
+    };
+    
+    processedWeather.set(weather.weather_id, weatherData);
+  }
+
+  console.log(`🌦️ Processed ${processedWeather.size} weather events`);
+  return processedWeather;
 }
 
 // Create mock data as fallback
@@ -298,6 +405,166 @@ async function checkStockChanges(checkAvailability = false) {
     await sendStockNotifications(restockedItems);
   } else {
     console.log(`📵 ${checkType} MONITORING DEBUG: No favorited items ${checkAvailability ? 'available' : 'restocked'} - no notifications sent`);
+  }
+}
+
+// Check for weather changes and send notifications
+async function checkWeatherChanges() {
+  if (users.size === 0) {
+    console.log('📵 No registered users - skipping weather change check');
+    return;
+  }
+
+  console.log(`🌦️ WEATHER MONITORING DEBUG: Starting weather change check...`);
+  console.log(`🌦️ WEATHER MONITORING DEBUG: Previous weather events: ${previousWeatherData.size}`);
+  console.log(`🌦️ WEATHER MONITORING DEBUG: Current weather events: ${weatherData.size}`);
+
+  const weatherChanges = [];
+
+  // Compare current weather with previous weather
+  for (const [weatherId, currentWeather] of weatherData) {
+    const previousWeather = previousWeatherData.get(weatherId);
+    
+    // Check if weather status changed
+    if (!previousWeather || previousWeather.active !== currentWeather.active) {
+      const statusChange = {
+        weatherId: weatherId,
+        weatherName: currentWeather.weatherName,
+        isActive: currentWeather.active,
+        wasActive: previousWeather ? previousWeather.active : false,
+        icon: currentWeather.icon,
+        duration: currentWeather.duration
+      };
+      
+      weatherChanges.push(statusChange);
+      
+      console.log(`🌦️ WEATHER CHANGE: ${currentWeather.weatherName} ${currentWeather.active ? 'started' : 'ended'}`);
+    }
+  }
+
+  // Check for weather events that ended (no longer in current data)
+  for (const [weatherId, previousWeather] of previousWeatherData) {
+    if (!weatherData.has(weatherId) && previousWeather.active) {
+      const statusChange = {
+        weatherId: weatherId,
+        weatherName: previousWeather.weatherName,
+        isActive: false,
+        wasActive: true,
+        icon: previousWeather.icon,
+        duration: 0
+      };
+      
+      weatherChanges.push(statusChange);
+      console.log(`🌦️ WEATHER ENDED: ${previousWeather.weatherName} is no longer active`);
+    }
+  }
+
+  if (weatherChanges.length > 0) {
+    console.log(`🌦️ Found ${weatherChanges.length} weather changes, sending notifications...`);
+    await sendWeatherNotifications(weatherChanges);
+  } else {
+    console.log(`🌦️ No weather changes detected`);
+  }
+}
+
+// Send notifications for weather changes
+async function sendWeatherNotifications(weatherChanges) {
+  if (!apnProvider) {
+    console.log('❌ APNs provider not available for weather notifications');
+    return;
+  }
+
+  const notificationsSent = [];
+
+  // Send weather notifications to all users (weather affects everyone)
+  for (const [deviceToken, userData] of users) {
+    if (!userData.notification_settings?.enabled) {
+      console.log(`❌ Notifications disabled for ${deviceToken.substring(0, 10)}...`);
+      continue;
+    }
+
+    // Group weather changes by active/inactive
+    const activeWeather = weatherChanges.filter(w => w.isActive);
+    const inactiveWeather = weatherChanges.filter(w => !w.isActive);
+
+    // Send notification for active weather events
+    if (activeWeather.length > 0) {
+      try {
+        await sendWeatherNotification(deviceToken, activeWeather, 'active');
+        if (!notificationsSent.includes(deviceToken.substring(0, 10))) {
+          notificationsSent.push(deviceToken.substring(0, 10));
+        }
+      } catch (error) {
+        console.error(`❌ Error sending active weather notification to ${deviceToken.substring(0, 10)}...:`, error);
+      }
+    }
+
+    // Send notification for ended weather events (optional, less important)
+    if (inactiveWeather.length > 0) {
+      try {
+        await sendWeatherNotification(deviceToken, inactiveWeather, 'ended');
+        if (!notificationsSent.includes(deviceToken.substring(0, 10))) {
+          notificationsSent.push(deviceToken.substring(0, 10));
+        }
+      } catch (error) {
+        console.error(`❌ Error sending ended weather notification to ${deviceToken.substring(0, 10)}...:`, error);
+      }
+    }
+  }
+
+  if (notificationsSent.length > 0) {
+    console.log(`🌦️ Successfully sent weather notifications to ${notificationsSent.length} users`);
+  } else {
+    console.log(`📵 No weather notifications sent`);
+  }
+}
+
+// Send individual weather notification
+async function sendWeatherNotification(deviceToken, weatherEvents, type) {
+  const notification = new apn.Notification();
+  
+  const weatherNames = weatherEvents.map(w => w.weatherName);
+  const isActive = type === 'active';
+  
+  if (weatherEvents.length === 1) {
+    // Single weather event
+    const weather = weatherEvents[0];
+    notification.alert = {
+      title: `🌦️ Weather ${isActive ? 'Started' : 'Ended'}!`,
+      body: `${weather.weatherName} is ${isActive ? 'now active' : 'no longer active'} in your garden.`
+    };
+  } else {
+    // Multiple weather events
+    notification.alert = {
+      title: `🌦️ Weather ${isActive ? 'Changes' : 'Updates'}!`,
+      body: `${weatherNames.join(', ')} ${isActive ? 'are now active' : 'have ended'} in your garden.`
+    };
+  }
+  
+  notification.payload = {
+    weather_events: weatherEvents,
+    type: `weather_${type}`,
+    category: 'weather'
+  };
+  
+  notification.badge = weatherEvents.length;
+  notification.sound = getUserSoundPreference(deviceToken);
+  notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+  
+  // Group weather notifications together
+  notification.threadId = `weather-${type}`;
+  notification.category = `WEATHER_${type.toUpperCase()}`;
+
+  console.log(`🌦️ Sending weather notification to ${deviceToken.substring(0, 10)}... for ${weatherEvents.length} events`);
+
+  const result = await apnProvider.send(notification, [deviceToken]);
+  
+  if (result.sent.length > 0) {
+    console.log(`✅ Sent weather notification to ${deviceToken.substring(0, 10)}...`);
+  }
+  
+  if (result.failed.length > 0) {
+    console.log(`❌ Failed to send weather notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
   }
 }
 
@@ -826,23 +1093,32 @@ async function startStockMonitoring() {
   }, 1 * 60 * 1000); // 1 minute for testing (was 5 minutes)
 }
 
-// Update stock data and check for changes
+// Update stock data and weather data, check for changes
 async function updateStockData() {
   try {
-    // Store previous stock for comparison
+    // Store previous data for comparison
     previousStockItems = new Map(stockItems);
+    previousWeatherData = new Map(weatherData);
     
-    // Fetch new stock data
-    const newStockData = await fetchRealStockData();
+    // Fetch new stock and weather data in parallel
+    const [newStockData, newWeatherData] = await Promise.all([
+      fetchRealStockData(),
+      fetchWeatherData()
+    ]);
+    
     stockItems = newStockData;
+    weatherData = newWeatherData;
     
     // Check for stock changes and send notifications
     await checkStockChanges(); // false = restock mode with modified logic
     
-    console.log(`📊 Stock update complete - tracking ${stockItems.size} items`);
+    // Check for weather changes and send notifications
+    await checkWeatherChanges();
+    
+    console.log(`📊 Update complete - tracking ${stockItems.size} items, ${weatherData.size} weather events`);
     
   } catch (error) {
-    console.error('❌ Error updating stock data:', error);
+    console.error('❌ Error updating stock/weather data:', error);
   }
 }
 
@@ -858,8 +1134,10 @@ app.get('/', (req, res) => {
     apns_ready: !!apnProvider,
     users_count: users.size,
     stock_items: stockItems.size,
+    weather_events: weatherData.size,
     monitoring_active: true,
-    api_url: STOCK_API_URL
+    api_url: STOCK_API_URL,
+    weather_api_url: WEATHER_API_URL
   });
 });
 
@@ -868,23 +1146,88 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     apns_configured: !!apnProvider,
     users: users.size,
-    stock_items: stockItems.size
+    stock_items: stockItems.size,
+    weather_events: weatherData.size,
+    api_version: 'v2'
   });
 });
 
-// Get current stock data
+// Get current stock data with v2 API enhancements
 app.get('/api/stock', (req, res) => {
   const stockArray = Array.from(stockItems.entries()).map(([name, data]) => ({
     name,
+    display_name: data.displayName || name,
     quantity: data.quantity,
-    category: data.category
+    category: data.category,
+    item_id: data.itemId,
+    icon: data.icon,
+    start_date: data.startDate,
+    end_date: data.endDate
   }));
   
   res.json({
     success: true,
     stock_items: stockArray,
     total_items: stockItems.size,
-    last_updated: new Date().toISOString()
+    last_updated: new Date().toISOString(),
+    api_version: 'v2'
+  });
+});
+
+// Get current weather data
+app.get('/api/weather', (req, res) => {
+  const weatherArray = Array.from(weatherData.entries()).map(([weatherId, data]) => ({
+    weather_id: weatherId,
+    weather_name: data.weatherName,
+    active: data.active,
+    duration: data.duration,
+    start_duration: data.startDuration,
+    end_duration: data.endDuration,
+    icon: data.icon
+  }));
+  
+  res.json({
+    success: true,
+    weather_events: weatherArray,
+    total_events: weatherData.size,
+    last_updated: new Date().toISOString(),
+    api_version: 'v2'
+  });
+});
+
+// Get combined stock and weather data
+app.get('/api/game-data', (req, res) => {
+  const stockArray = Array.from(stockItems.entries()).map(([name, data]) => ({
+    name,
+    display_name: data.displayName || name,
+    quantity: data.quantity,
+    category: data.category,
+    item_id: data.itemId,
+    icon: data.icon,
+    start_date: data.startDate,
+    end_date: data.endDate
+  }));
+  
+  const weatherArray = Array.from(weatherData.entries()).map(([weatherId, data]) => ({
+    weather_id: weatherId,
+    weather_name: data.weatherName,
+    active: data.active,
+    duration: data.duration,
+    start_duration: data.startDuration,
+    end_duration: data.endDuration,
+    icon: data.icon
+  }));
+  
+  res.json({
+    success: true,
+    stock_items: stockArray,
+    weather_events: weatherArray,
+    totals: {
+      stock_items: stockItems.size,
+      weather_events: weatherData.size
+    },
+    last_updated: new Date().toISOString(),
+    api_version: 'v2'
   });
 });
 
@@ -1133,13 +1476,57 @@ app.get('/api/stats', (req, res) => {
   const stats = {
     total_users: users.size,
     stock_items: stockItems.size,
+    weather_events: weatherData.size,
     apns_configured: !!apnProvider,
     monitoring_active: true,
-    api_url: STOCK_API_URL,
+    api_version: 'v2',
+    api_endpoints: {
+      stock: STOCK_API_URL,
+      weather: WEATHER_API_URL,
+      info: ITEM_INFO_API_URL
+    },
     server_time: new Date().toISOString()
   };
   
   res.json(stats);
+});
+
+// Test weather notification endpoint
+app.post('/api/test-weather-notification', async (req, res) => {
+  try {
+    const { device_token, weather_name, is_active } = req.body;
+    
+    if (!apnProvider) {
+      return res.status(500).json({ error: 'APNs not configured' });
+    }
+
+    if (!device_token) {
+      return res.status(400).json({ error: 'Device token required' });
+    }
+
+    // Create mock weather event for testing
+    const mockWeatherEvent = {
+      weatherId: 'test_weather',
+      weatherName: weather_name || 'Test Weather',
+      isActive: is_active !== false,
+      wasActive: false,
+      icon: 'https://example.com/weather-icon.png',
+      duration: 1800 // 30 minutes
+    };
+
+    await sendWeatherNotification(device_token, [mockWeatherEvent], mockWeatherEvent.isActive ? 'active' : 'ended');
+    
+    res.json({
+      success: true,
+      message: 'Weather test notification sent',
+      weather_event: mockWeatherEvent,
+      apns_environment: process.env.APNS_PRODUCTION === 'true' ? 'Production' : 'Development'
+    });
+    
+  } catch (error) {
+    console.error('❌ Weather test notification error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Debug endpoint to show all users and their favorites (for troubleshooting)
@@ -1452,7 +1839,7 @@ app.get('/api/version-check', (req, res) => {
     
     // Get version settings from environment variables
     const currentVersion = process.env.current_version || '1.2';
-    const oldVersions = (process.env.old_versions || '1.0,1.1').split(',').map(v => v.trim());
+    const oldVersions = (process.env.old_versions || '1.0').split(',').map(v => v.trim());
     
     console.log(`📱 Version check: User=${userVersion}, Current=${currentVersion}, Old=${oldVersions.join(',')}`);
     
@@ -1477,12 +1864,12 @@ app.get('/api/version-check', (req, res) => {
         id: 'version_update',
         type: 'update',
         title: 'Update Available',
-        message: `Please update to the latest version (${currentVersion}) for the best experience and latest features.`,
+        message: `Please update to the latest version (v.${currentVersion}) for the best experience and latest features.`,
         severity: isOldVersion ? 'high' : 'normal',
         icon: 'arrow.down.circle.fill',
         color: isOldVersion ? 'orange' : 'blue',
         action_text: 'Update Now',
-        action_url: 'https://apps.apple.com/app/id123456789' // Replace with actual App Store URL
+        action_url: 'https://apps.apple.com/app/gag-stocks' // Replace with actual App Store URL when published
       };
     }
     
@@ -1538,17 +1925,30 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 GAG Stocks server running on port ${PORT}`);
   console.log(`📱 APNs ready: ${!!apnProvider}`);
-  console.log(`🔗 Monitoring stock from: ${STOCK_API_URL}`);
+  console.log(`🔗 v2 API endpoints:`);
+  console.log(`   📦 Stock: ${STOCK_API_URL}`);
+  console.log(`   🌦️ Weather: ${WEATHER_API_URL}`);
+  console.log(`   ℹ️ Info: ${ITEM_INFO_API_URL}`);
   console.log(`🔑 Team ID: ${process.env.APNS_TEAM_ID || '8U376J9B6U'}`);
   console.log(`🆔 Key ID: ${process.env.APNS_KEY_ID || 'F9J436633X'}`);
+  console.log(`🔐 v2 API Key: ${process.env.JSTUDIO_API_KEY ? 'SET' : 'NOT SET'}`);
   
   // Log message system configuration
   const issueAlert = process.env.issue_alert_message || '';
   const basicMessage = process.env.basic_message || '';
   const currentVersion = process.env.current_version || '1.2';
+  const oldVersions = process.env.old_versions || '1.0';
   
   console.log(`📢 Message system ready:`);
   console.log(`   Issue alert: ${issueAlert ? 'SET' : 'not set'}`);
   console.log(`   Basic message: ${basicMessage ? 'SET' : 'not set'}`);
   console.log(`   Current version: ${currentVersion}`);
+  console.log(`   Old versions: ${oldVersions}`);
+  
+  console.log(`🎯 v2 Migration Features:`);
+  console.log(`   ✅ Dynamic images from API`);
+  console.log(`   ✅ Weather monitoring & notifications`);
+  console.log(`   ✅ Rich item metadata (icons, dates)`);
+  console.log(`   ✅ Enhanced stock data structure`);
+  console.log(`   ✅ Reduced hardcoded dependencies`);
 }); 
