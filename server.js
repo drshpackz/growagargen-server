@@ -27,6 +27,13 @@ let apnProvider = null;
 let weatherData = new Map(); // weather_id -> weather data
 let previousWeatherData = new Map(); // For change detection
 
+// Data freshness tracking
+let lastStockUpdateTime = null;
+let lastWeatherUpdateTime = null;
+let lastAPICallTime = null;
+let apiCallCount = 0;
+let successfulAPICallCount = 0;
+
 // New v2 API endpoints
 const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
 const WEATHER_API_URL = 'https://api.joshlei.com/v2/growagarden/weather';
@@ -58,6 +65,10 @@ function initializeAPNs() {
 async function fetchRealStockData() {
   try {
     console.log('🔄 Fetching stock data from v2 API...');
+    
+    // Track API call metrics
+    lastAPICallTime = new Date();
+    apiCallCount++;
     
     const apiKey = process.env.JSTUDIO_API_KEY;
     if (!apiKey) {
@@ -91,6 +102,11 @@ async function fetchRealStockData() {
 
     const data = await response.json();
     console.log('✅ Successfully fetched v2 stock data');
+    
+    // Track successful API call
+    successfulAPICallCount++;
+    lastStockUpdateTime = new Date();
+    
     console.log('🔍 Validating image URLs before processing...');
     return await processStockData(data);
     
@@ -134,6 +150,10 @@ async function fetchWeatherData() {
 
     const data = await response.json();
     console.log('✅ Successfully fetched weather data');
+    
+    // Track successful weather update
+    lastWeatherUpdateTime = new Date();
+    
     console.log('🔍 Validating weather icon URLs...');
     return await processWeatherData(data);
     
@@ -1402,10 +1422,10 @@ async function startStockMonitoring() {
   // Initial fetch
   await updateStockData();
   
-  // Set up interval for every 1 minute (changed from 5 minutes for better testing)
+  // Set up interval for every 30 seconds for maximum freshness
   setInterval(async () => {
     await updateStockData();
-  }, 1 * 60 * 1000); // 1 minute for testing (was 5 minutes)
+  }, 30 * 1000); // 30 seconds for maximum freshness
 }
 
 // Update stock data and weather data, check for changes
@@ -1469,6 +1489,7 @@ app.get('/health', (req, res) => {
 
 // Get current stock data with v2 API enhancements
 app.get('/api/stock', (req, res) => {
+  const now = new Date();
   const stockArray = Array.from(stockItems.entries()).map(([name, data]) => ({
     name,
     display_name: data.displayName || name,
@@ -1484,8 +1505,17 @@ app.get('/api/stock', (req, res) => {
     success: true,
     stock_items: stockArray,
     total_items: stockItems.size,
-    last_updated: new Date().toISOString(),
-    api_version: 'v2'
+    last_updated: now.toISOString(),
+    api_version: 'v2',
+    timing_data: {
+      server_time_utc: now.toISOString(),
+      data_freshness: lastStockUpdateTime ? {
+        last_update_utc: lastStockUpdateTime.toISOString(),
+        seconds_ago: Math.floor((now - lastStockUpdateTime) / 1000),
+        freshness_rating: getFreshnessRating(now, lastStockUpdateTime)
+      } : null,
+      next_update_in_seconds: 30 - (Math.floor((now - (lastAPICallTime || now)) / 1000) % 30)
+    }
   });
 });
 
@@ -1640,6 +1670,36 @@ app.post('/api/refresh-stock', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Webhook endpoint for real-time updates from joshlei.com API
+app.post('/api/webhook/stock-update', async (req, res) => {
+  try {
+    const { webhook_secret, event_type, data } = req.body;
+    
+    // Verify webhook secret
+    const expectedSecret = process.env.WEBHOOK_SECRET || process.env.API_SECRET || 'growagargen-secret-2025';
+    if (webhook_secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized webhook' });
+    }
+    
+    console.log(`🔥 REAL-TIME WEBHOOK: ${event_type} received`);
+    console.log(`🔥 WEBHOOK DATA:`, JSON.stringify(data, null, 2));
+    
+    // Trigger immediate stock update
+    await updateStockData();
+    
+    res.json({
+      success: true,
+      message: `Webhook ${event_type} processed successfully`,
+      timestamp: new Date().toISOString(),
+      processed_immediately: true
+    });
+    
+  } catch (error) {
+    console.error('❌ Webhook processing error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1805,6 +1865,56 @@ app.get('/api/stats', (req, res) => {
   
   res.json(stats);
 });
+
+// Data freshness endpoint - shows how fresh the current data is
+app.get('/api/data-freshness', (req, res) => {
+  const now = new Date();
+  
+  const freshness = {
+    server_time: now.toISOString(),
+    monitoring_interval_seconds: 30,
+    last_api_call: lastAPICallTime ? {
+      timestamp: lastAPICallTime.toISOString(),
+      seconds_ago: Math.floor((now - lastAPICallTime) / 1000)
+    } : null,
+    stock_data: {
+      last_update: lastStockUpdateTime ? {
+        timestamp: lastStockUpdateTime.toISOString(),
+        seconds_ago: Math.floor((now - lastStockUpdateTime) / 1000),
+        freshness_rating: getFreshnessRating(now, lastStockUpdateTime)
+      } : null,
+      items_count: stockItems.size
+    },
+    weather_data: {
+      last_update: lastWeatherUpdateTime ? {
+        timestamp: lastWeatherUpdateTime.toISOString(),
+        seconds_ago: Math.floor((now - lastWeatherUpdateTime) / 1000),
+        freshness_rating: getFreshnessRating(now, lastWeatherUpdateTime)
+      } : null,
+      events_count: weatherData.size
+    },
+    api_health: {
+      total_calls: apiCallCount,
+      successful_calls: successfulAPICallCount,
+      success_rate: apiCallCount > 0 ? Math.round((successfulAPICallCount / apiCallCount) * 100) : 0
+    }
+  };
+  
+  res.json(freshness);
+});
+
+// Helper function to rate data freshness
+function getFreshnessRating(now, lastUpdate) {
+  if (!lastUpdate) return 'unknown';
+  
+  const secondsAgo = Math.floor((now - lastUpdate) / 1000);
+  
+  if (secondsAgo < 30) return 'excellent';
+  if (secondsAgo < 60) return 'good';
+  if (secondsAgo < 300) return 'fair';
+  if (secondsAgo < 600) return 'stale';
+  return 'very_stale';
+}
 
 // Test weather notification endpoint
 app.post('/api/test-weather-notification', async (req, res) => {
