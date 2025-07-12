@@ -134,7 +134,8 @@ async function fetchWeatherData() {
 
     const data = await response.json();
     console.log('✅ Successfully fetched weather data');
-    return processWeatherData(data);
+    console.log('🔍 Validating weather icon URLs...');
+    return await processWeatherData(data);
     
   } catch (error) {
     console.error('❌ Error fetching weather data:', error.message);
@@ -484,7 +485,7 @@ function createCompleteItemCatalog(existingItems) {
 }
 
 // Process weather data from v2 API
-function processWeatherData(apiResponse) {
+async function processWeatherData(apiResponse) {
   const processedWeather = new Map();
   
   if (!apiResponse || !apiResponse.weather || !Array.isArray(apiResponse.weather)) {
@@ -493,6 +494,9 @@ function processWeatherData(apiResponse) {
   }
 
   for (const weather of apiResponse.weather) {
+    // Validate weather icon URL before including it
+    const hasValidIcon = await validateImageURL(weather.icon);
+    
     const weatherData = {
       weatherId: weather.weather_id,
       weatherName: weather.weather_name,
@@ -500,10 +504,14 @@ function processWeatherData(apiResponse) {
       duration: weather.duration,
       startDuration: weather.start_duration_unix,
       endDuration: weather.end_duration_unix,
-      icon: weather.icon
+      icon: hasValidIcon ? weather.icon : null // Only include valid weather icon URLs
     };
     
     processedWeather.set(weather.weather_id, weatherData);
+    
+    if (!hasValidIcon && weather.icon) {
+      console.log(`🚫 Weather icon invalid: ${weather.weather_name} - ${weather.icon}`);
+    }
   }
 
   console.log(`🌦️ Processed ${processedWeather.size} weather events`);
@@ -2319,10 +2327,10 @@ app.listen(PORT, () => {
   
   console.log(`🎯 v2 Migration Features:`);
   console.log(`   ✅ Dynamic images from API`);
-  console.log(`   ✅ Image URL validation (no 404/logotype)`);
+  console.log(`   ✅ Image URL validation (stock + weather icons)`);
   console.log(`   ✅ Weather monitoring & notifications`);
   console.log(`   ✅ Rich item metadata (icons, dates)`);
   console.log(`   ✅ Enhanced stock data structure`);
   console.log(`   ✅ Reduced hardcoded dependencies`);
-  console.log(`🖼️ Image validation cache: 1 hour duration`);
+  console.log(`🖼️ Image validation: Stock items + Weather icons (1hr cache)`);
 }); 
