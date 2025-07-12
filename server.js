@@ -91,7 +91,8 @@ async function fetchRealStockData() {
 
     const data = await response.json();
     console.log('✅ Successfully fetched v2 stock data');
-    return processStockData(data);
+    console.log('🔍 Validating image URLs before processing...');
+    return await processStockData(data);
     
   } catch (error) {
     console.error('❌ Error fetching v2 stock data:', error.message);
@@ -141,8 +142,65 @@ async function fetchWeatherData() {
   }
 }
 
+// Image validation cache to avoid repeated checks
+let imageValidationCache = new Map(); // URL -> { isValid: boolean, lastChecked: timestamp }
+const IMAGE_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+
+// Function to validate if an image URL returns a valid image (not 404 or logotype)
+async function validateImageURL(imageUrl) {
+  if (!imageUrl) return false;
+  
+  // Check cache first
+  const cached = imageValidationCache.get(imageUrl);
+  if (cached && (Date.now() - cached.lastChecked) < IMAGE_CACHE_DURATION) {
+    return cached.isValid;
+  }
+  
+  try {
+    const response = await fetch(imageUrl, { 
+      method: 'HEAD',
+      timeout: 5000 // 5 second timeout
+    });
+    
+    // Check basic validity
+    const isHttpOk = response.ok;
+    const isImageType = response.headers.get('content-type')?.startsWith('image/');
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    
+    // Reject very small images (likely logotype) - minimum 1KB
+    const isValidSize = contentLength > 1024 || contentLength === 0; // 0 means no content-length header
+    
+    const isValid = isHttpOk && isImageType && isValidSize;
+    
+    // Cache the result
+    imageValidationCache.set(imageUrl, {
+      isValid: isValid,
+      lastChecked: Date.now()
+    });
+    
+    if (!isValid) {
+      const reason = !isHttpOk ? `HTTP ${response.status}` : 
+                    !isImageType ? 'not image type' : 
+                    !isValidSize ? `too small (${contentLength}b)` : 'unknown';
+      console.log(`❌ Invalid image URL: ${imageUrl} (${reason})`);
+    }
+    
+    return isValid;
+  } catch (error) {
+    console.log(`❌ Error validating image URL ${imageUrl}: ${error.message}`);
+    
+    // Cache failed validation
+    imageValidationCache.set(imageUrl, {
+      isValid: false,
+      lastChecked: Date.now()
+    });
+    
+    return false;
+  }
+}
+
 // Process stock data from v2 API into our format
-function processStockData(apiResponse) {
+async function processStockData(apiResponse) {
   const processedItems = new Map();
   
   if (!apiResponse) {
@@ -172,17 +230,28 @@ function processStockData(apiResponse) {
   // Process seeds from v2 API
   if (apiResponse.seed_stock && Array.isArray(apiResponse.seed_stock)) {
     for (const item of apiResponse.seed_stock) {
+      // Validate image URL before including the item
+      const hasValidImage = await validateImageURL(item.icon);
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'seeds',
         itemId: item.item_id,
         displayName: item.display_name,
-        icon: item.icon,
+        icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix
       };
       
-      processedItems.set(item.display_name, itemData);
+      // Only include items with valid images (or items with quantity > 0 even without images)
+      if (hasValidImage || item.quantity > 0) {
+        processedItems.set(item.display_name, itemData);
+        if (!hasValidImage && item.quantity > 0) {
+          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
+        }
+      } else {
+        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
+      }
     }
   }
 
@@ -204,17 +273,28 @@ function processStockData(apiResponse) {
   // Process gear from v2 API
   if (apiResponse.gear_stock && Array.isArray(apiResponse.gear_stock)) {
     for (const item of apiResponse.gear_stock) {
+      // Validate image URL before including the item
+      const hasValidImage = await validateImageURL(item.icon);
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'gear',
         itemId: item.item_id,
         displayName: item.display_name,
-        icon: item.icon,
+        icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix
       };
       
-      processedItems.set(item.display_name, itemData);
+      // Only include items with valid images (or items with quantity > 0 even without images)
+      if (hasValidImage || item.quantity > 0) {
+        processedItems.set(item.display_name, itemData);
+        if (!hasValidImage && item.quantity > 0) {
+          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
+        }
+      } else {
+        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
+      }
     }
   }
 
@@ -236,17 +316,28 @@ function processStockData(apiResponse) {
   // Process cosmetic from v2 API
   if (apiResponse.cosmetic_stock && Array.isArray(apiResponse.cosmetic_stock)) {
     for (const item of apiResponse.cosmetic_stock) {
+      // Validate image URL before including the item
+      const hasValidImage = await validateImageURL(item.icon);
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'cosmetic',
         itemId: item.item_id,
         displayName: item.display_name,
-        icon: item.icon,
+        icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix
       };
       
-      processedItems.set(item.display_name, itemData);
+      // Only include items with valid images (or items with quantity > 0 even without images)
+      if (hasValidImage || item.quantity > 0) {
+        processedItems.set(item.display_name, itemData);
+        if (!hasValidImage && item.quantity > 0) {
+          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
+        }
+      } else {
+        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
+      }
     }
   }
 
@@ -254,27 +345,42 @@ function processStockData(apiResponse) {
   if (apiResponse.egg_stock && Array.isArray(apiResponse.egg_stock)) {
     for (const item of apiResponse.egg_stock) {
       if (item.display_name && !item.display_name.toLowerCase().includes('location')) {
+        // Validate image URL before including the item
+        const hasValidImage = await validateImageURL(item.icon);
+        
         // Check if this egg type already exists
         const existingEgg = processedItems.get(item.display_name);
         
         if (existingEgg) {
           // Aggregate quantities for duplicate egg types
           existingEgg.quantity += (item.quantity || 0);
+          // Update icon if this instance has a valid image
+          if (hasValidImage) {
+            existingEgg.icon = item.icon;
+          }
           console.log(`🥚 Aggregated ${item.display_name}: ${existingEgg.quantity} total`);
         } else {
-          // New egg type
-          const itemData = {
-            quantity: item.quantity || 0,
-            category: 'eggs',
-            itemId: item.item_id,
-            displayName: item.display_name,
-            originalName: item.display_name,
-            icon: item.icon,
-            startDate: item.start_date_unix,
-            endDate: item.end_date_unix
-          };
-          
-          processedItems.set(item.display_name, itemData);
+          // New egg type - only include if it has valid image or has stock
+          if (hasValidImage || item.quantity > 0) {
+            const itemData = {
+              quantity: item.quantity || 0,
+              category: 'eggs',
+              itemId: item.item_id,
+              displayName: item.display_name,
+              originalName: item.display_name,
+              icon: hasValidImage ? item.icon : null, // Only include valid image URLs
+              startDate: item.start_date_unix,
+              endDate: item.end_date_unix
+            };
+            
+            processedItems.set(item.display_name, itemData);
+            
+            if (!hasValidImage && item.quantity > 0) {
+              console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
+            }
+          } else {
+            console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
+          }
         }
       }
     }
@@ -1811,6 +1917,71 @@ app.post('/api/clear-notification-cache', (req, res) => {
   }
 });
 
+// Clear image validation cache (for testing)
+app.post('/api/clear-image-cache', (req, res) => {
+  try {
+    const { api_secret } = req.body;
+    
+    // Simple API secret check
+    const expectedSecret = process.env.API_SECRET || 'growagargen-secret-2025';
+    if (api_secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const previousSize = imageValidationCache.size;
+    imageValidationCache.clear();
+    console.log(`🧹 Cleared image validation cache (${previousSize} entries)`);
+    
+    res.json({
+      success: true,
+      message: `Image validation cache cleared (${previousSize} entries removed)`,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Clear image cache error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get image validation cache stats
+app.get('/api/image-cache-stats', (req, res) => {
+  try {
+    const stats = {
+      total_entries: imageValidationCache.size,
+      valid_images: 0,
+      invalid_images: 0,
+      cache_duration_hours: IMAGE_CACHE_DURATION / (60 * 60 * 1000),
+      entries: []
+    };
+    
+    for (const [url, data] of imageValidationCache) {
+      if (data.isValid) {
+        stats.valid_images++;
+      } else {
+        stats.invalid_images++;
+      }
+      
+      stats.entries.push({
+        url: url,
+        is_valid: data.isValid,
+        last_checked: new Date(data.lastChecked).toISOString(),
+        age_minutes: Math.round((Date.now() - data.lastChecked) / (60 * 1000))
+      });
+    }
+    
+    res.json({
+      success: true,
+      stats: stats,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Image cache stats error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Countdown endpoints for shop restock times
 app.get('/api/countdown/seeds', (req, res) => {
   try {
@@ -2148,8 +2319,10 @@ app.listen(PORT, () => {
   
   console.log(`🎯 v2 Migration Features:`);
   console.log(`   ✅ Dynamic images from API`);
+  console.log(`   ✅ Image URL validation (no 404/logotype)`);
   console.log(`   ✅ Weather monitoring & notifications`);
   console.log(`   ✅ Rich item metadata (icons, dates)`);
   console.log(`   ✅ Enhanced stock data structure`);
   console.log(`   ✅ Reduced hardcoded dependencies`);
+  console.log(`🖼️ Image validation cache: 1 hour duration`);
 }); 
