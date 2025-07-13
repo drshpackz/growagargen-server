@@ -241,6 +241,13 @@ async function fetchItemInfo(itemId) {
     });
     
     console.log(`📝 Fetched item info for: ${itemId} (rarity: ${data.rarity || 'none'})`);
+    
+    // Special logging for debugging rarity issues
+    if (itemId === 'giant_pinecone') {
+      console.log(`🔍 DEBUG: giant_pinecone rarity from API: "${data.rarity}"`);
+      console.log(`🔍 DEBUG: giant_pinecone full response:`, JSON.stringify(data, null, 2));
+    }
+    
     return data;
     
   } catch (error) {
@@ -381,6 +388,12 @@ async function processStockData(apiResponse) {
       
       processedItems.set(item.display_name, itemData);
       console.log(`🌱 Processed seed: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
+      
+      // Special debug logging for giant_pinecone
+      if (item.item_id === 'giant_pinecone') {
+        console.log(`🔍 DEBUG: giant_pinecone processed with rarity: "${itemData.rarity}"`);
+        console.log(`🔍 DEBUG: giant_pinecone itemInfo:`, itemInfo);
+      }
     }
   }
 
@@ -2498,6 +2511,38 @@ app.get('/api/debug-always-shown-items', (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch always-shown items debug info'
+    });
+  }
+});
+
+// Debug endpoint to test item rarity fetching
+app.get('/api/debug-item-rarity/:itemId', async (req, res) => {
+  try {
+    const itemId = req.params.itemId;
+    
+    console.log(`🔍 DEBUG: Testing rarity fetch for item: ${itemId}`);
+    
+    // Fetch item info directly
+    const itemInfo = await fetchItemInfo(itemId);
+    
+    const response = {
+      success: true,
+      item_id: itemId,
+      item_info: itemInfo,
+      rarity_from_api: itemInfo?.rarity || null,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`🔍 DEBUG: Item info result for ${itemId}:`, JSON.stringify(response, null, 2));
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error(`❌ Error testing rarity fetch for ${req.params.itemId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch item rarity',
+      details: error.message
     });
   }
 });
