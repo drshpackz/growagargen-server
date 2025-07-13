@@ -43,6 +43,75 @@ const ITEM_INFO_API_URL = 'https://api.joshlei.com/v2/growagarden/info';
 let itemInfoCache = new Map(); // item_id -> item_info
 const ITEM_INFO_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 
+// Parse environment variables for always-shown items
+function parseAlwaysShownItems() {
+  const seedItems = (process.env.SEED_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
+  const gearItems = (process.env.GEAR_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
+  const eggItems = (process.env.EGG_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
+  
+  return {
+    seeds: seedItems,
+    gear: gearItems,
+    eggs: eggItems
+  };
+}
+
+// Fetch always-shown items and add them to processed items if not already present
+async function addAlwaysShownItems(processedItems) {
+  const alwaysShownItems = parseAlwaysShownItems();
+  
+  console.log(`📋 Always-shown items configured:`);
+  console.log(`   Seeds: ${alwaysShownItems.seeds.length} items (${alwaysShownItems.seeds.join(', ')})`);
+  console.log(`   Gear: ${alwaysShownItems.gear.length} items (${alwaysShownItems.gear.join(', ')})`);
+  console.log(`   Eggs: ${alwaysShownItems.eggs.length} items (${alwaysShownItems.eggs.join(', ')})`);
+  
+  // Process each category
+  for (const [category, itemIds] of Object.entries(alwaysShownItems)) {
+    for (const itemId of itemIds) {
+      try {
+        // Fetch item info from the API
+        const itemInfo = await fetchItemInfo(itemId);
+        
+        if (!itemInfo) {
+          console.log(`⚠️ Could not fetch info for always-shown item: ${itemId}`);
+          continue;
+        }
+        
+        // Check if item is already in processed items (from current stock)
+        const existingItem = processedItems.get(itemInfo.display_name);
+        
+        if (existingItem) {
+          console.log(`✅ Always-shown item ${itemInfo.display_name} already in stock (qty: ${existingItem.quantity})`);
+          continue;
+        }
+        
+        // Add the item with quantity 0 (out of stock but available for favoriting)
+        const itemData = {
+          quantity: 0,
+          category: category,
+          itemId: itemInfo.item_id,
+          displayName: itemInfo.display_name,
+          icon: itemInfo.icon,
+          startDate: null,
+          endDate: null,
+          rarity: itemInfo.rarity || null
+        };
+        
+        // For eggs, also add originalName for compatibility
+        if (category === 'eggs') {
+          itemData.originalName = itemInfo.display_name;
+        }
+        
+        processedItems.set(itemInfo.display_name, itemData);
+        console.log(`📦 Added always-shown item: ${itemInfo.display_name} [${category}] (out of stock, available for favorites)`);
+        
+      } catch (error) {
+        console.error(`❌ Error processing always-shown item ${itemId}:`, error.message);
+      }
+    }
+  }
+}
+
 // Initialize APNs provider
 function initializeAPNs() {
   if (!process.env.APNS_KEY_CONTENT) {
@@ -418,6 +487,13 @@ async function processStockData(apiResponse) {
 
   console.log(`📊 Processed ${processedItems.size} total items dynamically from API`);
   console.log(`📊 Breakdown: ${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic`);
+  
+  // Add always-shown items from environment variables (out of stock but available for favoriting)
+  await addAlwaysShownItems(processedItems);
+  
+  const finalCount = processedItems.size;
+  console.log(`📊 Final item count: ${finalCount} items (includes always-shown out-of-stock items)`);
+  console.log(`📊 Final breakdown: ${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic`);
   
   return processedItems;
 }
@@ -2392,6 +2468,36 @@ app.post('/api/test-message', (req, res) => {
   }
 });
 
+// Debug endpoint to show always-shown items configuration
+app.get('/api/debug-always-shown-items', (req, res) => {
+  try {
+    const alwaysShownItems = parseAlwaysShownItems();
+    
+    const response = {
+      success: true,
+      always_shown_items: alwaysShownItems,
+      environment_variables: {
+        SEED_SHOP_ITEM_ID: process.env.SEED_SHOP_ITEM_ID || null,
+        GEAR_SHOP_ITEM_ID: process.env.GEAR_SHOP_ITEM_ID || null,
+        EGG_SHOP_ITEM_ID: process.env.EGG_SHOP_ITEM_ID || null
+      },
+      total_configured: alwaysShownItems.seeds.length + alwaysShownItems.gear.length + alwaysShownItems.eggs.length,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`📋 Debug always-shown items requested: ${response.total_configured} items configured`);
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error('❌ Error fetching always-shown items debug info:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch always-shown items debug info'
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 GAG Stocks server running on port ${PORT}`);
@@ -2424,4 +2530,12 @@ app.listen(PORT, () => {
   console.log(`   ✅ Enhanced stock data structure`);
   console.log(`   ✅ Reduced hardcoded dependencies`);
   console.log(`🖼️ Image validation: Stock items + Weather icons (1hr cache)`);
+  
+  // Log always-shown items configuration
+  const alwaysShownItems = parseAlwaysShownItems();
+  console.log(`📋 Always-shown items configuration:`);
+  console.log(`   Seeds: ${alwaysShownItems.seeds.length > 0 ? alwaysShownItems.seeds.join(', ') : 'none configured'}`);
+  console.log(`   Gear: ${alwaysShownItems.gear.length > 0 ? alwaysShownItems.gear.join(', ') : 'none configured'}`);
+  console.log(`   Eggs: ${alwaysShownItems.eggs.length > 0 ? alwaysShownItems.eggs.join(', ') : 'none configured'}`);
+  console.log(`   These items will always be shown for favoriting, even when out of stock`);
 }); 
