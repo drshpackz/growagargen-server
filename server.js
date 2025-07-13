@@ -39,6 +39,10 @@ const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
 const WEATHER_API_URL = 'https://api.joshlei.com/v2/growagarden/weather';
 const ITEM_INFO_API_URL = 'https://api.joshlei.com/v2/growagarden/info';
 
+// Cache for item info to avoid repeated API calls
+let itemInfoCache = new Map(); // item_id -> item_info
+const ITEM_INFO_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+
 // Initialize APNs provider
 function initializeAPNs() {
   if (!process.env.APNS_KEY_CONTENT) {
@@ -121,6 +125,55 @@ async function fetchRealStockData() {
       console.log('🔄 No existing stock, using mock data as fallback');
       return createMockStockData();
     }
+  }
+}
+
+// Fetch item info from the v2 API
+async function fetchItemInfo(itemId) {
+  try {
+    // Check cache first
+    const cached = itemInfoCache.get(itemId);
+    if (cached && (Date.now() - cached.lastFetched) < ITEM_INFO_CACHE_DURATION) {
+      return cached.data;
+    }
+    
+    const apiKey = process.env.JSTUDIO_API_KEY;
+    if (!apiKey) {
+      console.log(`⚠️ No API key configured, skipping item info for ${itemId}`);
+      return null;
+    }
+    
+    const response = await fetch(`${ITEM_INFO_API_URL}/${itemId}`, {
+      headers: {
+        'jstudio-key': apiKey,
+        'Accept': 'application/json',
+        'User-Agent': 'GrowAGarden-StockBot/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.log(`📝 Item info not found for: ${itemId}`);
+      } else {
+        console.log(`⚠️ Item info API returned ${response.status} for ${itemId}`);
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    
+    // Cache the result
+    itemInfoCache.set(itemId, {
+      data: data,
+      lastFetched: Date.now()
+    });
+    
+    console.log(`📝 Fetched item info for: ${itemId} (rarity: ${data.rarity || 'none'})`);
+    return data;
+    
+  } catch (error) {
+    console.error(`❌ Error fetching item info for ${itemId}:`, error.message);
+    return null;
   }
 }
 
@@ -226,33 +279,22 @@ async function processStockData(apiResponse) {
   
   if (!apiResponse) {
     console.log('⚠️ Invalid API response');
-    return createCompleteItemCatalog(new Map());
+    return processedItems; // Return empty map instead of hardcoded catalog
   }
 
-  // Define complete item catalogs for all categories
-  const allPossibleSeeds = [
-    "Carrot", "Strawberry", "Blueberry", "Orange Tulip", "Tomato", "Corn", "Daffodil", 
-    "Watermelon", "Pumpkin", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit", 
-    "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Ember Lily", 
-    "Sugar Apple", "Burning Bud", "Avocado"
-  ];
-
-  const allPossibleGear = [
-    "Watering Can", "Trowel", "Recall Wrench", "Basic Sprinkler", "Advanced Sprinkler", 
-    "Godly Sprinkler", "Magnifying Glass", "Tanning Mirror", "Master Sprinkler", 
-    "Cleaning Spray", "Favorite Tool", "Harvest Tool", "Friendship Pot"
-  ];
-
-  const allPossibleEggs = [
-    "Common Egg", "Uncommon Egg", "Rare Egg", "Legendary Egg", "Bee Egg", "Bug Egg", 
-    "Common Summer Egg", "Rare Summer Egg", "Paradise Summer Egg", "Paradise Egg"
-  ];
+  console.log('🔄 Processing items dynamically from API (no hardcoded lists)...');
 
   // Process seeds from v2 API
   if (apiResponse.seed_stock && Array.isArray(apiResponse.seed_stock)) {
     for (const item of apiResponse.seed_stock) {
       // Validate image URL before including the item
       const hasValidImage = await validateImageURL(item.icon);
+      
+      // Fetch item info to get rarity (if available)
+      let itemInfo = null;
+      if (item.item_id) {
+        itemInfo = await fetchItemInfo(item.item_id);
+      }
       
       const itemData = {
         quantity: item.quantity || 0,
@@ -261,33 +303,12 @@ async function processStockData(apiResponse) {
         displayName: item.display_name,
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
-        endDate: item.end_date_unix
+        endDate: item.end_date_unix,
+        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
       };
       
-      // Only include items with valid images (or items with quantity > 0 even without images)
-      if (hasValidImage || item.quantity > 0) {
-        processedItems.set(item.display_name, itemData);
-        if (!hasValidImage && item.quantity > 0) {
-          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
-        }
-      } else {
-        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
-      }
-    }
-  }
-
-  // Add all possible seeds that weren't in the API response (out of stock)
-  for (const seedName of allPossibleSeeds) {
-    if (!processedItems.has(seedName)) {
-      processedItems.set(seedName, {
-        quantity: 0,
-        category: 'seeds',
-        itemId: null,
-        displayName: seedName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
+      processedItems.set(item.display_name, itemData);
+      console.log(`🌱 Processed seed: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
     }
   }
 
@@ -297,6 +318,12 @@ async function processStockData(apiResponse) {
       // Validate image URL before including the item
       const hasValidImage = await validateImageURL(item.icon);
       
+      // Fetch item info to get rarity (if available)
+      let itemInfo = null;
+      if (item.item_id) {
+        itemInfo = await fetchItemInfo(item.item_id);
+      }
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'gear',
@@ -304,33 +331,12 @@ async function processStockData(apiResponse) {
         displayName: item.display_name,
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
-        endDate: item.end_date_unix
+        endDate: item.end_date_unix,
+        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
       };
       
-      // Only include items with valid images (or items with quantity > 0 even without images)
-      if (hasValidImage || item.quantity > 0) {
-        processedItems.set(item.display_name, itemData);
-        if (!hasValidImage && item.quantity > 0) {
-          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
-        }
-      } else {
-        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
-      }
-    }
-  }
-
-  // Add all possible gear that wasn't in the API response (out of stock)
-  for (const gearName of allPossibleGear) {
-    if (!processedItems.has(gearName)) {
-      processedItems.set(gearName, {
-        quantity: 0,
-        category: 'gear',
-        itemId: null,
-        displayName: gearName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
+      processedItems.set(item.display_name, itemData);
+      console.log(`⚙️ Processed gear: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
     }
   }
 
@@ -340,6 +346,12 @@ async function processStockData(apiResponse) {
       // Validate image URL before including the item
       const hasValidImage = await validateImageURL(item.icon);
       
+      // Fetch item info to get rarity (if available)
+      let itemInfo = null;
+      if (item.item_id) {
+        itemInfo = await fetchItemInfo(item.item_id);
+      }
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'cosmetic',
@@ -347,18 +359,12 @@ async function processStockData(apiResponse) {
         displayName: item.display_name,
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
-        endDate: item.end_date_unix
+        endDate: item.end_date_unix,
+        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
       };
       
-      // Only include items with valid images (or items with quantity > 0 even without images)
-      if (hasValidImage || item.quantity > 0) {
-        processedItems.set(item.display_name, itemData);
-        if (!hasValidImage && item.quantity > 0) {
-          console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
-        }
-      } else {
-        console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
-      }
+      processedItems.set(item.display_name, itemData);
+      console.log(`🎨 Processed cosmetic: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
     }
   }
 
@@ -372,6 +378,12 @@ async function processStockData(apiResponse) {
         // Check if this egg type already exists
         const existingEgg = processedItems.get(item.display_name);
         
+        // Fetch item info to get rarity (if available)
+        let itemInfo = null;
+        if (item.item_id) {
+          itemInfo = await fetchItemInfo(item.item_id);
+        }
+        
         if (existingEgg) {
           // Aggregate quantities for duplicate egg types
           existingEgg.quantity += (item.quantity || 0);
@@ -379,129 +391,35 @@ async function processStockData(apiResponse) {
           if (hasValidImage) {
             existingEgg.icon = item.icon;
           }
-          console.log(`🥚 Aggregated ${item.display_name}: ${existingEgg.quantity} total`);
-        } else {
-          // New egg type - only include if it has valid image or has stock
-          if (hasValidImage || item.quantity > 0) {
-            const itemData = {
-              quantity: item.quantity || 0,
-              category: 'eggs',
-              itemId: item.item_id,
-              displayName: item.display_name,
-              originalName: item.display_name,
-              icon: hasValidImage ? item.icon : null, // Only include valid image URLs
-              startDate: item.start_date_unix,
-              endDate: item.end_date_unix
-            };
-            
-            processedItems.set(item.display_name, itemData);
-            
-            if (!hasValidImage && item.quantity > 0) {
-              console.log(`⚠️ Including ${item.display_name} without image (has stock: ${item.quantity})`);
-            }
-          } else {
-            console.log(`🚫 Skipping ${item.display_name} - no valid image and out of stock`);
+          // Update rarity if available
+          if (itemInfo?.rarity) {
+            existingEgg.rarity = itemInfo.rarity;
           }
+          console.log(`🥚 Aggregated ${item.display_name}: ${existingEgg.quantity} total (rarity: ${existingEgg.rarity || 'unknown'})`);
+        } else {
+          const itemData = {
+            quantity: item.quantity || 0,
+            category: 'eggs',
+            itemId: item.item_id,
+            displayName: item.display_name,
+            originalName: item.display_name,
+            icon: hasValidImage ? item.icon : null, // Only include valid image URLs
+            startDate: item.start_date_unix,
+            endDate: item.end_date_unix,
+            rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
+          };
+          
+          processedItems.set(item.display_name, itemData);
+          console.log(`🥚 Processed egg: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
         }
       }
     }
   }
 
-  // Add all possible eggs that weren't in the API response (out of stock)
-  for (const eggName of allPossibleEggs) {
-    if (!processedItems.has(eggName)) {
-      processedItems.set(eggName, {
-        quantity: 0,
-        category: 'eggs',
-        itemId: null,
-        displayName: eggName,
-        originalName: eggName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
-    }
-  }
-
-  console.log(`📊 Processed ${processedItems.size} total items from v2 API (including out-of-stock)`);
+  console.log(`📊 Processed ${processedItems.size} total items dynamically from API`);
   console.log(`📊 Breakdown: ${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic`);
   
   return processedItems;
-}
-
-// Helper function to create complete item catalog when API fails
-function createCompleteItemCatalog(existingItems) {
-  const completeItems = new Map(existingItems);
-  
-  // All possible seeds
-  const allSeeds = [
-    "Carrot", "Strawberry", "Blueberry", "Orange Tulip", "Tomato", "Corn", "Daffodil", 
-    "Watermelon", "Pumpkin", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit", 
-    "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Ember Lily", 
-    "Sugar Apple", "Burning Bud", "Avocado"
-  ];
-
-  // All possible gear
-  const allGear = [
-    "Watering Can", "Trowel", "Recall Wrench", "Basic Sprinkler", "Advanced Sprinkler", 
-    "Godly Sprinkler", "Magnifying Glass", "Tanning Mirror", "Master Sprinkler", 
-    "Cleaning Spray", "Favorite Tool", "Harvest Tool", "Friendship Pot"
-  ];
-
-  // All possible eggs
-  const allEggs = [
-    "Common Egg", "Uncommon Egg", "Rare Egg", "Legendary Egg", "Bee Egg", "Bug Egg", 
-    "Common Summer Egg", "Rare Summer Egg", "Paradise Summer Egg", "Paradise Egg"
-  ];
-
-  // Add missing seeds
-  for (const seedName of allSeeds) {
-    if (!completeItems.has(seedName)) {
-      completeItems.set(seedName, {
-        quantity: 0,
-        category: 'seeds',
-        itemId: null,
-        displayName: seedName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
-    }
-  }
-
-  // Add missing gear
-  for (const gearName of allGear) {
-    if (!completeItems.has(gearName)) {
-      completeItems.set(gearName, {
-        quantity: 0,
-        category: 'gear',
-        itemId: null,
-        displayName: gearName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
-    }
-  }
-
-  // Add missing eggs
-  for (const eggName of allEggs) {
-    if (!completeItems.has(eggName)) {
-      completeItems.set(eggName, {
-        quantity: 0,
-        category: 'eggs',
-        itemId: null,
-        displayName: eggName,
-        originalName: eggName,
-        icon: null,
-        startDate: null,
-        endDate: null
-      });
-    }
-  }
-
-  console.log(`📊 Complete catalog created with ${completeItems.size} total items`);
-  return completeItems;
 }
 
 // Process weather data from v2 API
@@ -1000,7 +918,11 @@ function getItemRarity(itemName) {
   if (divineItems.includes(itemName)) return 'Divine';
   if (prismaticItems.includes(itemName)) return 'Prismatic';
   
-  return 'Unknown'; // fallback for unclassified items
+  // 🆕 NEW: Log unknown items for future classification
+  console.log(`⚠️ UNKNOWN ITEM RARITY: '${itemName}' - defaulting to Rare (will send notifications)`);
+  console.log(`💡 Consider adding '${itemName}' to appropriate rarity tier in server.js getItemRarity()`);
+  
+  return 'Rare'; // Default to Rare for new items so they get notifications
 }
 
 // Get rarity emoji and info
@@ -1012,11 +934,11 @@ function getRarityInfo(rarity) {
     'Legendary': { emoji: '🌟', shouldNotify: true, tier: 4 },
     'Mythical': { emoji: '🔥', shouldNotify: true, tier: 5 },
     'Divine': { emoji: '✨', shouldNotify: true, tier: 6 },
-    'Prismatic': { emoji: '🌈', shouldNotify: true, tier: 7 },
-    'Unknown': { emoji: '❓', shouldNotify: true, tier: 0 }
+    'Prismatic': { emoji: '🌈', shouldNotify: true, tier: 7 }
   };
   
-  return rarityMap[rarity] || rarityMap['Unknown'];
+  // Default to Rare tier for any unclassified items (new items from game updates)
+  return rarityMap[rarity] || rarityMap['Rare'];
 }
 
 // NEW: Get emoji for specific items
@@ -1498,7 +1420,8 @@ app.get('/api/stock', (req, res) => {
     item_id: data.itemId,
     icon: data.icon,
     start_date: data.startDate,
-    end_date: data.endDate
+    end_date: data.endDate,
+    rarity: data.rarity  // NEW: Include API-provided rarity
   }));
   
   res.json({
@@ -2062,6 +1985,33 @@ app.post('/api/clear-image-cache', (req, res) => {
   }
 });
 
+// Clear item info cache (for testing)
+app.post('/api/clear-item-info-cache', (req, res) => {
+  try {
+    const { api_secret } = req.body;
+    
+    // Simple API secret check
+    const expectedSecret = process.env.API_SECRET || 'growagargen-secret-2025';
+    if (api_secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const previousSize = itemInfoCache.size;
+    itemInfoCache.clear();
+    console.log(`🧹 Cleared item info cache (${previousSize} entries)`);
+    
+    res.json({
+      success: true,
+      message: `Item info cache cleared (${previousSize} entries removed)`,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Clear item info cache error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get image validation cache stats
 app.get('/api/image-cache-stats', (req, res) => {
   try {
@@ -2096,6 +2046,37 @@ app.get('/api/image-cache-stats', (req, res) => {
     
   } catch (error) {
     console.error('❌ Image cache stats error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get item info cache stats
+app.get('/api/item-info-cache-stats', (req, res) => {
+  try {
+    const stats = {
+      total_entries: itemInfoCache.size,
+      cache_duration_hours: ITEM_INFO_CACHE_DURATION / (60 * 60 * 1000),
+      entries: []
+    };
+    
+    for (const [itemId, cachedData] of itemInfoCache) {
+      stats.entries.push({
+        item_id: itemId,
+        item_name: cachedData.data?.display_name || 'unknown',
+        rarity: cachedData.data?.rarity || null,
+        last_fetched: new Date(cachedData.lastFetched).toISOString(),
+        age_minutes: Math.round((Date.now() - cachedData.lastFetched) / (60 * 1000))
+      });
+    }
+    
+    res.json({
+      success: true,
+      stats: stats,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Item info cache stats error:', error);
     res.status(500).json({ error: error.message });
   }
 });
