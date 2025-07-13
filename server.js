@@ -58,6 +58,34 @@ function parseAlwaysShownItems() {
   };
 }
 
+// Parse rarity fixes from environment variable
+function parseRarityFixes() {
+  const rarityFixString = process.env.RARITY_FIX || '';
+  const rarityFixes = new Map();
+  
+  if (rarityFixString.trim()) {
+    const fixes = rarityFixString.split(',').map(fix => fix.trim()).filter(fix => fix);
+    
+    for (const fix of fixes) {
+      const [itemId, rarity] = fix.split('=').map(part => part.trim());
+      if (itemId && rarity) {
+        // Normalize rarity to proper case (first letter uppercase)
+        const normalizedRarity = rarity.charAt(0).toUpperCase() + rarity.slice(1).toLowerCase();
+        rarityFixes.set(itemId, normalizedRarity);
+        console.log(`🔧 Rarity fix loaded: ${itemId} → ${normalizedRarity}`);
+      }
+    }
+  }
+  
+  return rarityFixes;
+}
+
+// Get rarity override for an item (takes priority over API)
+function getRarityOverride(itemId) {
+  const rarityFixes = parseRarityFixes();
+  return rarityFixes.get(itemId) || null;
+}
+
 // Fetch always-shown items and add them to processed items if not already present
 async function addAlwaysShownItems(processedItems) {
   const alwaysShownItems = parseAlwaysShownItems();
@@ -88,6 +116,10 @@ async function addAlwaysShownItems(processedItems) {
           continue;
         }
         
+        // Get rarity with priority: Override > API > null
+        const rarityOverride = getRarityOverride(itemId);
+        const finalRarity = rarityOverride || itemInfo.rarity || null;
+        
         // Add the item with quantity 0 (out of stock but available for favoriting)
         const itemData = {
           quantity: 0,
@@ -97,7 +129,7 @@ async function addAlwaysShownItems(processedItems) {
           icon: itemInfo.icon,
           startDate: null,
           endDate: null,
-          rarity: itemInfo.rarity || null
+          rarity: finalRarity  // Priority: Override > API > null
         };
         
         // For eggs, also add originalName for compatibility
@@ -242,10 +274,10 @@ async function fetchItemInfo(itemId) {
     
     console.log(`📝 Fetched item info for: ${itemId} (rarity: ${data.rarity || 'none'})`);
     
-    // Special logging for debugging rarity issues
-    if (itemId === 'giant_pinecone') {
-      console.log(`🔍 DEBUG: giant_pinecone rarity from API: "${data.rarity}"`);
-      console.log(`🔍 DEBUG: giant_pinecone full response:`, JSON.stringify(data, null, 2));
+    // Check if this item has a rarity override
+    const override = getRarityOverride(itemId);
+    if (override) {
+      console.log(`🔧 Rarity override applied for ${itemId}: ${override} (API: ${data.rarity || 'none'})`);
     }
     
     return data;
@@ -375,6 +407,10 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
+      // Get rarity with priority: Override > API > null
+      const rarityOverride = getRarityOverride(item.item_id);
+      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'seeds',
@@ -383,16 +419,15 @@ async function processStockData(apiResponse) {
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix,
-        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
+        rarity: finalRarity  // Priority: Override > API > null
       };
       
       processedItems.set(item.display_name, itemData);
-      console.log(`🌱 Processed seed: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'})`);
+      console.log(`🌱 Processed seed: ${item.display_name} (qty: ${item.quantity}, rarity: ${finalRarity || 'unknown'}${rarityOverride ? ' [OVERRIDE]' : ''})`);
       
-      // Special debug logging for giant_pinecone
-      if (item.item_id === 'giant_pinecone') {
-        console.log(`🔍 DEBUG: giant_pinecone processed with rarity: "${itemData.rarity}"`);
-        console.log(`🔍 DEBUG: giant_pinecone itemInfo:`, itemInfo);
+      // Show override details for any item that has one
+      if (rarityOverride && itemInfo?.rarity && rarityOverride !== itemInfo.rarity) {
+        console.log(`🔧 Rarity override used for ${item.display_name}: ${rarityOverride} (overrode API: ${itemInfo.rarity})`);
       }
     }
   }
@@ -409,6 +444,10 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
+      // Get rarity with priority: Override > API > null
+      const rarityOverride = getRarityOverride(item.item_id);
+      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'gear',
@@ -417,7 +456,7 @@ async function processStockData(apiResponse) {
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix,
-        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
+        rarity: finalRarity  // Priority: Override > API > null
       };
       
       processedItems.set(item.display_name, itemData);
@@ -437,6 +476,10 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
+      // Get rarity with priority: Override > API > null
+      const rarityOverride = getRarityOverride(item.item_id);
+      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      
       const itemData = {
         quantity: item.quantity || 0,
         category: 'cosmetic',
@@ -445,7 +488,7 @@ async function processStockData(apiResponse) {
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix,
-        rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
+        rarity: finalRarity  // Priority: Override > API > null
       };
       
       processedItems.set(item.display_name, itemData);
@@ -469,6 +512,10 @@ async function processStockData(apiResponse) {
           itemInfo = await fetchItemInfo(item.item_id);
         }
         
+        // Get rarity with priority: Override > API > null
+        const rarityOverride = getRarityOverride(item.item_id);
+        const finalRarity = rarityOverride || itemInfo?.rarity || null;
+        
         if (existingEgg) {
           // Aggregate quantities for duplicate egg types
           existingEgg.quantity += (item.quantity || 0);
@@ -476,9 +523,9 @@ async function processStockData(apiResponse) {
           if (hasValidImage) {
             existingEgg.icon = item.icon;
           }
-          // Update rarity if available
-          if (itemInfo?.rarity) {
-            existingEgg.rarity = itemInfo.rarity;
+          // Update rarity with override priority
+          if (finalRarity) {
+            existingEgg.rarity = finalRarity;
           }
           console.log(`🥚 Aggregated ${item.display_name}: ${existingEgg.quantity} total (rarity: ${existingEgg.rarity || 'unknown'})`);
         } else {
@@ -491,7 +538,7 @@ async function processStockData(apiResponse) {
             icon: hasValidImage ? item.icon : null, // Only include valid image URLs
             startDate: item.start_date_unix,
             endDate: item.end_date_unix,
-            rarity: itemInfo?.rarity || null  // NEW: API-provided rarity
+            rarity: finalRarity  // Priority: Override > API > null
           };
           
           processedItems.set(item.display_name, itemData);
@@ -2489,16 +2536,21 @@ app.get('/api/debug-always-shown-items', (req, res) => {
   try {
     const alwaysShownItems = parseAlwaysShownItems();
     
+    const rarityFixes = parseRarityFixes();
+    
     const response = {
       success: true,
       always_shown_items: alwaysShownItems,
+      rarity_fixes: Object.fromEntries(rarityFixes),
       environment_variables: {
         SEED_SHOP_ITEM_ID: process.env.SEED_SHOP_ITEM_ID || null,
         GEAR_SHOP_ITEM_ID: process.env.GEAR_SHOP_ITEM_ID || null,
         EGG_SHOP_ITEM_ID: process.env.EGG_SHOP_ITEM_ID || null,
-        COSMETICS_SHOP_ITEM_ID: process.env.COSMETICS_SHOP_ITEM_ID || null
+        COSMETICS_SHOP_ITEM_ID: process.env.COSMETICS_SHOP_ITEM_ID || null,
+        RARITY_FIX: process.env.RARITY_FIX || null
       },
       total_configured: alwaysShownItems.seeds.length + alwaysShownItems.gear.length + alwaysShownItems.eggs.length + alwaysShownItems.cosmetic.length,
+      total_rarity_fixes: rarityFixes.size,
       timestamp: new Date().toISOString()
     };
     
@@ -2525,11 +2577,16 @@ app.get('/api/debug-item-rarity/:itemId', async (req, res) => {
     // Fetch item info directly
     const itemInfo = await fetchItemInfo(itemId);
     
+    const rarityOverride = getRarityOverride(itemId);
+    const finalRarity = rarityOverride || itemInfo?.rarity || null;
+    
     const response = {
       success: true,
       item_id: itemId,
       item_info: itemInfo,
       rarity_from_api: itemInfo?.rarity || null,
+      rarity_override: rarityOverride,
+      final_rarity: finalRarity,
       timestamp: new Date().toISOString()
     };
     
@@ -2588,4 +2645,18 @@ app.listen(PORT, () => {
   console.log(`   Eggs: ${alwaysShownItems.eggs.length > 0 ? alwaysShownItems.eggs.join(', ') : 'none configured'}`);
   console.log(`   Cosmetic: ${alwaysShownItems.cosmetic.length > 0 ? alwaysShownItems.cosmetic.join(', ') : 'none configured'}`);
   console.log(`   These items will always be shown for favoriting, even when out of stock`);
+  
+  // Log rarity fixes configuration
+  const rarityFixes = parseRarityFixes();
+  console.log(`🔧 Rarity fixes configuration:`);
+  if (rarityFixes.size > 0) {
+    for (const [itemId, rarity] of rarityFixes) {
+      console.log(`   ${itemId} → ${rarity}`);
+    }
+    console.log(`   These override API rarity values for specific items`);
+  } else {
+    console.log(`   No rarity fixes configured (set RARITY_FIX env var if needed)`);
+    console.log(`   Format: RARITY_FIX=item_id=rarity,another_item=rarity`);
+    console.log(`   Example: RARITY_FIX=giant_pinecone=Prismatic,another_item=Legendary`);
+  }
 }); 
