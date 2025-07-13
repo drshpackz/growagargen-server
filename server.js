@@ -48,11 +48,13 @@ function parseAlwaysShownItems() {
   const seedItems = (process.env.SEED_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
   const gearItems = (process.env.GEAR_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
   const eggItems = (process.env.EGG_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
+  const cosmeticItems = (process.env.COSMETICS_SHOP_ITEM_ID || '').split(',').map(id => id.trim()).filter(id => id);
   
   return {
     seeds: seedItems,
     gear: gearItems,
-    eggs: eggItems
+    eggs: eggItems,
+    cosmetic: cosmeticItems
   };
 }
 
@@ -64,6 +66,7 @@ async function addAlwaysShownItems(processedItems) {
   console.log(`   Seeds: ${alwaysShownItems.seeds.length} items (${alwaysShownItems.seeds.join(', ')})`);
   console.log(`   Gear: ${alwaysShownItems.gear.length} items (${alwaysShownItems.gear.join(', ')})`);
   console.log(`   Eggs: ${alwaysShownItems.eggs.length} items (${alwaysShownItems.eggs.join(', ')})`);
+  console.log(`   Cosmetic: ${alwaysShownItems.cosmetic.length} items (${alwaysShownItems.cosmetic.join(', ')})`);
   
   // Process each category
   for (const [category, itemIds] of Object.entries(alwaysShownItems)) {
@@ -2479,9 +2482,10 @@ app.get('/api/debug-always-shown-items', (req, res) => {
       environment_variables: {
         SEED_SHOP_ITEM_ID: process.env.SEED_SHOP_ITEM_ID || null,
         GEAR_SHOP_ITEM_ID: process.env.GEAR_SHOP_ITEM_ID || null,
-        EGG_SHOP_ITEM_ID: process.env.EGG_SHOP_ITEM_ID || null
+        EGG_SHOP_ITEM_ID: process.env.EGG_SHOP_ITEM_ID || null,
+        COSMETICS_SHOP_ITEM_ID: process.env.COSMETICS_SHOP_ITEM_ID || null
       },
-      total_configured: alwaysShownItems.seeds.length + alwaysShownItems.gear.length + alwaysShownItems.eggs.length,
+      total_configured: alwaysShownItems.seeds.length + alwaysShownItems.gear.length + alwaysShownItems.eggs.length + alwaysShownItems.cosmetic.length,
       timestamp: new Date().toISOString()
     };
     
@@ -2537,5 +2541,6 @@ app.listen(PORT, () => {
   console.log(`   Seeds: ${alwaysShownItems.seeds.length > 0 ? alwaysShownItems.seeds.join(', ') : 'none configured'}`);
   console.log(`   Gear: ${alwaysShownItems.gear.length > 0 ? alwaysShownItems.gear.join(', ') : 'none configured'}`);
   console.log(`   Eggs: ${alwaysShownItems.eggs.length > 0 ? alwaysShownItems.eggs.join(', ') : 'none configured'}`);
+  console.log(`   Cosmetic: ${alwaysShownItems.cosmetic.length > 0 ? alwaysShownItems.cosmetic.join(', ') : 'none configured'}`);
   console.log(`   These items will always be shown for favoriting, even when out of stock`);
 }); 
