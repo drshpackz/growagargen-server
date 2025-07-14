@@ -2442,13 +2442,34 @@ app.get('/api/messages', (req, res) => {
   }
 });
 
+// Simple version endpoint
+app.get('/api/version', (req, res) => {
+  try {
+    const currentVersion = process.env.current_version || '1.0';
+    console.log(`📱 Version request: Returning ${currentVersion}`);
+    
+    res.json({
+      success: true,
+      version: currentVersion
+    });
+    
+  } catch (error) {
+    console.error('❌ Error getting version:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get version',
+      version: '1.0'
+    });
+  }
+});
+
 // Version check endpoint
 app.get('/api/version-check', (req, res) => {
   try {
     const userVersion = req.query.version || req.headers['app-version'] || '1.0';
     
     // Get version settings from environment variables
-    const currentVersion = process.env.current_version || '1.2';
+    const currentVersion = process.env.current_version || '1.0';
     const oldVersions = (process.env.old_versions || '1.0').split(',').map(v => v.trim());
     
     console.log(`📱 Version check: User=${userVersion}, Current=${currentVersion}, Old=${oldVersions.join(',')}`);
