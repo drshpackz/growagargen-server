@@ -2,6 +2,7 @@ const express = require('express');
 const apn = require('apn');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -1548,6 +1549,11 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Serve privacy policy page
+app.get('/privacy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy.html'));
+});
+
 // Get current stock data with v2 API enhancements
 app.get('/api/stock', (req, res) => {
   const now = new Date();
@@ -1639,41 +1645,38 @@ app.get('/api/game-data', (req, res) => {
 });
 
 // Register device endpoint
-app.post('/api/register-device', async (req, res) => {
-  try {
-    const { device_token, platform, app_version, favorite_items, notification_settings } = req.body;
-    
-    if (!device_token) {
-      return res.status(400).json({ success: false, error: 'Device token required' });
-    }
-
-    // Store user data
-    const userData = {
-      device_token,
-      platform: platform || 'ios',
-      app_version: app_version || '1.0',
-      favorite_items: favorite_items || [],
-      notification_settings: notification_settings || { enabled: true },
-      registered_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    users.set(device_token, userData);
-    
-    console.log(`✅ Registered device: ${device_token.substring(0, 10)}... with ${favorite_items?.length || 0} favorites`);
-    
-    res.json({ 
-      success: true, 
-      message: 'Device registered successfully',
-      apns_ready: !!apnProvider,
-      favorites_count: favorite_items?.length || 0,
-      monitoring_active: true
-    });
-    
-  } catch (error) {
-    console.error('❌ Registration error:', error);
-    res.status(500).json({ success: false, error: error.message });
+app.post('/api/register-device', (req, res) => {
+  const { device_token, platform, app_version, favorite_items, notification_settings } = req.body;
+  
+  if (!device_token) {
+    return res.status(400).json({ error: 'Device token is required' });
   }
+  
+  console.log(`📱 Device registration: ${device_token.substring(0, 10)}... (${platform}) v${app_version}`);
+  
+  // Store user data
+  users.set(device_token, {
+    platform: platform || 'ios',
+    app_version: app_version || 'unknown',
+    favorite_items: favorite_items || [],
+    notification_settings: notification_settings || {},
+    last_updated: new Date().toISOString()
+  });
+  
+  console.log(`👥 Total registered users: ${users.size}`);
+  
+  // Log user's favorite items for debugging
+  if (favorite_items && favorite_items.length > 0) {
+    console.log(`❤️ User favorites: ${favorite_items.join(', ')}`);
+  }
+  
+  res.json({ 
+    success: true, 
+    message: 'Device registered successfully',
+    favorites_count: favorite_items ? favorite_items.length : 0,
+    apns_ready: !!apnProvider,
+    monitoring_active: true
+  });
 });
 
 // Manual stock update endpoint (for testing)
@@ -2680,4 +2683,338 @@ app.listen(PORT, () => {
     console.log(`   Format: RARITY_FIX=item_id=rarity,another_item=rarity`);
     console.log(`   Example: RARITY_FIX=giant_pinecone=Prismatic,another_item=Legendary`);
   }
-}); 
+});
+
+// App Store Server Notifications endpoints
+app.post('/api/appstore/notifications/production', async (req, res) => {
+    console.log('🍎 App Store Server Notification (Production) received');
+    console.log('Headers:', req.headers);
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
+    try {
+        const signedPayload = req.body.signedPayload;
+        if (!signedPayload) {
+            console.error('❌ No signedPayload in notification');
+            return res.status(400).json({ error: 'Missing signedPayload' });
+        }
+        
+        // TODO: Verify JWT signature (implement in production)
+        // const isValid = await verifyAppStoreNotification(signedPayload);
+        // if (!isValid) {
+        //     return res.status(401).json({ error: 'Invalid signature' });
+        // }
+        
+        // Parse the payload (base64 decode JWT payload)
+        const payload = JSON.parse(Buffer.from(signedPayload.split('.')[1], 'base64').toString());
+        console.log('📱 Decoded payload:', JSON.stringify(payload, null, 2));
+        
+        // Handle different notification types
+        const notificationType = payload.notificationType;
+        console.log(`🎯 Notification type: ${notificationType}`);
+        
+        switch (notificationType) {
+            case 'SUBSCRIBED':
+                console.log('✅ User subscribed to premium');
+                // TODO: Grant premium access
+                break;
+            case 'DID_RENEW':
+                console.log('🔄 Subscription renewed');
+                // TODO: Extend premium access
+                break;
+            case 'EXPIRED':
+                console.log('⏰ Subscription expired');
+                // TODO: Remove premium access
+                break;
+            case 'DID_CANCEL':
+                console.log('❌ User canceled subscription');
+                // TODO: Handle cancellation
+                break;
+            case 'REFUND':
+                console.log('💰 Refund processed');
+                // TODO: Remove premium access
+                break;
+            default:
+                console.log(`❓ Unknown notification type: ${notificationType}`);
+        }
+        
+        res.status(200).json({ status: 'success' });
+        
+    } catch (error) {
+        console.error('❌ Error processing App Store notification:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.post('/api/appstore/notifications/sandbox', async (req, res) => {
+    console.log('🍎 App Store Server Notification (Sandbox) received');
+    console.log('Headers:', req.headers);
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
+    try {
+        const signedPayload = req.body.signedPayload;
+        if (!signedPayload) {
+            console.error('❌ No signedPayload in notification');
+            return res.status(400).json({ error: 'Missing signedPayload' });
+        }
+        
+        // Parse the payload (base64 decode JWT payload)
+        const payload = JSON.parse(Buffer.from(signedPayload.split('.')[1], 'base64').toString());
+        console.log('📱 Decoded sandbox payload:', JSON.stringify(payload, null, 2));
+        
+        // Handle sandbox notifications (same logic as production)
+        const notificationType = payload.notificationType;
+        console.log(`🎯 Sandbox notification type: ${notificationType}`);
+        
+        // TODO: Implement same logic as production
+        
+        res.status(200).json({ status: 'success' });
+        
+    } catch (error) {
+        console.error('❌ Error processing sandbox App Store notification:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// MARK: - Receipt Validation Endpoints
+
+// Production App Store receipt validation URL
+const PRODUCTION_RECEIPT_URL = 'https://buy.itunes.apple.com/verifyReceipt';
+// Sandbox App Store receipt validation URL  
+const SANDBOX_RECEIPT_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
+
+// Validate receipt endpoint
+app.post('/api/validate-receipt', async (req, res) => {
+  try {
+    const { receipt_data, password } = req.body;
+    
+    if (!receipt_data) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Receipt data is required' 
+      });
+    }
+    
+    console.log('🧾 Validating receipt...');
+    
+    // Step 1: Always try production first (as recommended by Apple)
+    const productionResult = await validateReceiptWithApple(receipt_data, password, PRODUCTION_RECEIPT_URL);
+    
+    if (productionResult.success) {
+      console.log('✅ Receipt validated successfully in production');
+      return res.json(productionResult);
+    }
+    
+    // Step 2: If production fails with sandbox error, try sandbox
+    if (productionResult.status === 21007) {
+      console.log('🔄 Production returned sandbox error, trying sandbox...');
+      const sandboxResult = await validateReceiptWithApple(receipt_data, password, SANDBOX_RECEIPT_URL);
+      
+      if (sandboxResult.success) {
+        console.log('✅ Receipt validated successfully in sandbox');
+        return res.json({ ...sandboxResult, environment: 'sandbox' });
+      }
+    }
+    
+    // Step 3: Return the original error if both fail
+    console.log('❌ Receipt validation failed in both environments');
+    return res.status(400).json(productionResult);
+    
+  } catch (error) {
+    console.error('❌ Receipt validation error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error during receipt validation' 
+    });
+  }
+});
+
+// Helper function to validate receipt with Apple
+async function validateReceiptWithApple(receiptData, password, validationURL) {
+  try {
+    const payload = {
+      'receipt-data': receiptData,
+      'exclude-old-transactions': true
+    };
+    
+    // Add password for auto-renewable subscriptions if provided
+    if (password) {
+      payload.password = password;
+    }
+    
+    const response = await fetch(validationURL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    const result = await response.json();
+    
+    console.log(`🧾 Receipt validation response status: ${result.status}`);
+    
+    // Handle different status codes
+    switch (result.status) {
+      case 0:
+        // Success
+        return {
+          success: true,
+          receipt: result.receipt,
+          latest_receipt_info: result.latest_receipt_info,
+          pending_renewal_info: result.pending_renewal_info,
+          status: result.status
+        };
+        
+      case 21007:
+        // This receipt is from the test environment, but it was sent to the production environment for verification
+        return {
+          success: false,
+          error: 'Sandbox receipt sent to production',
+          status: result.status
+        };
+        
+      case 21002:
+        return {
+          success: false,
+          error: 'Receipt data was malformed or missing',
+          status: result.status
+        };
+        
+      case 21003:
+        return {
+          success: false,
+          error: 'Receipt could not be authenticated',
+          status: result.status
+        };
+        
+      case 21004:
+        return {
+          success: false,
+          error: 'Shared secret does not match',
+          status: result.status
+        };
+        
+      case 21005:
+        return {
+          success: false,
+          error: 'Receipt server is not currently available',
+          status: result.status
+        };
+        
+      case 21006:
+        return {
+          success: false,
+          error: 'Receipt is valid but subscription has expired',
+          status: result.status,
+          receipt: result.receipt,
+          latest_receipt_info: result.latest_receipt_info
+        };
+        
+      case 21008:
+        return {
+          success: false,
+          error: 'This receipt is from the production environment, but it was sent to the test environment for verification',
+          status: result.status
+        };
+        
+      default:
+        return {
+          success: false,
+          error: `Unknown validation error: ${result.status}`,
+          status: result.status
+        };
+    }
+    
+  } catch (error) {
+    console.error('❌ Error validating receipt with Apple:', error);
+    return {
+      success: false,
+      error: 'Network error during receipt validation',
+      status: -1
+    };
+  }
+}
+
+// Check subscription status endpoint
+app.post('/api/subscription-status', async (req, res) => {
+  try {
+    const { receipt_data, password } = req.body;
+    
+    if (!receipt_data) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Receipt data is required' 
+      });
+    }
+    
+    console.log('🔍 Checking subscription status...');
+    
+    // Validate receipt using the same logic
+    const productionResult = await validateReceiptWithApple(receipt_data, password, PRODUCTION_RECEIPT_URL);
+    let validationResult = productionResult;
+    
+    if (!productionResult.success && productionResult.status === 21007) {
+      validationResult = await validateReceiptWithApple(receipt_data, password, SANDBOX_RECEIPT_URL);
+    }
+    
+    if (!validationResult.success) {
+      return res.status(400).json(validationResult);
+    }
+    
+    // Parse subscription information
+    const subscriptionInfo = parseSubscriptionInfo(validationResult);
+    
+    return res.json({
+      success: true,
+      subscription: subscriptionInfo
+    });
+    
+  } catch (error) {
+    console.error('❌ Subscription status check error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error during subscription check' 
+    });
+  }
+});
+
+// Helper function to parse subscription information from receipt
+function parseSubscriptionInfo(validationResult) {
+  try {
+    const latestReceiptInfo = validationResult.latest_receipt_info;
+    
+    if (!latestReceiptInfo || latestReceiptInfo.length === 0) {
+      return {
+        is_active: false,
+        product_id: null,
+        expires_date: null,
+        purchase_date: null
+      };
+    }
+    
+    // Get the latest subscription
+    const latestSubscription = latestReceiptInfo[latestReceiptInfo.length - 1];
+    const expiresDate = new Date(parseInt(latestSubscription.expires_date_ms));
+    const purchaseDate = new Date(parseInt(latestSubscription.purchase_date_ms));
+    const now = new Date();
+    
+    return {
+      is_active: expiresDate > now,
+      product_id: latestSubscription.product_id,
+      expires_date: expiresDate.toISOString(),
+      purchase_date: purchaseDate.toISOString(),
+      transaction_id: latestSubscription.transaction_id,
+      original_transaction_id: latestSubscription.original_transaction_id
+    };
+    
+  } catch (error) {
+    console.error('❌ Error parsing subscription info:', error);
+    return {
+      is_active: false,
+      product_id: null,
+      expires_date: null,
+      purchase_date: null,
+      error: 'Failed to parse subscription information'
+    };
+  }
+} 
