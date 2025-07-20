@@ -941,7 +941,7 @@ async function sendWeatherNotification(deviceToken, weatherEvents, type) {
   };
   
   notification.badge = weatherEvents.length;
-  notification.sound = getUserSoundPreference(deviceToken);
+  notification.sound = getUserSoundPreference(deviceToken, 'weather');
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
   
   // Group weather notifications together
@@ -1330,24 +1330,33 @@ function getItemCategory(itemName) {
   }
 }
 
-// Get user's sound preference
-function getUserSoundPreference(deviceToken) {
+// Get user's sound preference for a specific category
+function getUserSoundPreference(deviceToken, notificationCategory = 'stock') {
   const userData = users.get(deviceToken);
   const soundEnabled = userData?.notification_settings?.sound;
-  const selectedSound = userData?.notification_settings?.selected_sound;
+  const categorySounds = userData?.notification_settings?.category_sounds;
+  const selectedSound = userData?.notification_settings?.selected_sound; // DEPRECATED fallback
   
   // If sound is disabled, return null (no sound)
   if (!soundEnabled) {
     return null;
   }
   
-  // If custom sound is selected, return it
+  // NEW: Use category-specific sound if available
+  if (categorySounds && categorySounds[notificationCategory]) {
+    const categorySound = categorySounds[notificationCategory];
+    console.log(`🔊 Using category sound: ${categorySound}.mp3 for ${notificationCategory} notifications (${deviceToken.substring(0, 10)}...)`);
+    return `${categorySound}.mp3`;
+  }
+  
+  // DEPRECATED: Fallback to global sound setting
   if (selectedSound && selectedSound !== 'default') {
-    console.log(`🔊 Using custom sound: ${selectedSound}.mp3 for ${deviceToken.substring(0, 10)}...`);
+    console.log(`🔊 Using global sound (DEPRECATED): ${selectedSound}.mp3 for ${deviceToken.substring(0, 10)}...`);
     return `${selectedSound}.mp3`;
   }
   
   // Default to system default sound
+  console.log(`🔊 Using default sound for ${notificationCategory} notifications (${deviceToken.substring(0, 10)}...)`);
   return 'default';
 }
 
@@ -1405,7 +1414,7 @@ async function sendCategoryNotification(deviceToken, category, items) {
 
   // Professional notification enhancements
   notification.badge = items.length;
-  notification.sound = getUserSoundPreference(deviceToken);
+  notification.sound = getUserSoundPreference(deviceToken, 'stock');
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
   
   // Add thread identifier for grouping related notifications
@@ -1457,7 +1466,7 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   
   // Professional notification enhancements
   notification.badge = 1;
-  notification.sound = getUserSoundPreference(deviceToken);
+  notification.sound = getUserSoundPreference(deviceToken, 'stock');
   notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
   
   // Group premium notifications together
@@ -1855,7 +1864,7 @@ app.post('/api/test-notification', async (req, res) => {
     };
     
     notification.badge = 1;
-    notification.sound = getUserSoundPreference(device_token);
+    notification.sound = getUserSoundPreference(device_token, 'stock');
     notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
     
     // Professional test notification grouping
@@ -2031,7 +2040,8 @@ app.get('/api/debug-users-favorites', (req, res) => {
         favorites_count: (userData.favorite_items || []).length,
         notification_enabled: userData.notification_settings?.enabled || false,
         sound_enabled: userData.notification_settings?.sound || false,
-        selected_sound: userData.notification_settings?.selected_sound || 'notify',
+        selected_sound: userData.notification_settings?.selected_sound || 'notify', // DEPRECATED
+        category_sounds: userData.notification_settings?.category_sounds || { stock: 'bell', weather: 'notify' }, // NEW
         notification_settings: userData.notification_settings || {},
         registered_at: userData.registered_at,
         updated_at: userData.updated_at
