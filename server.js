@@ -2030,6 +2030,9 @@ app.get('/api/debug-users-favorites', (req, res) => {
         favorite_items: userData.favorite_items || [],
         favorites_count: (userData.favorite_items || []).length,
         notification_enabled: userData.notification_settings?.enabled || false,
+        sound_enabled: userData.notification_settings?.sound || false,
+        selected_sound: userData.notification_settings?.selected_sound || 'notify',
+        notification_settings: userData.notification_settings || {},
         registered_at: userData.registered_at,
         updated_at: userData.updated_at
       });
