@@ -28,6 +28,10 @@ let apnProvider = null;
 let weatherData = new Map(); // weather_id -> weather data
 let previousWeatherData = new Map(); // For change detection
 
+// Event data storage
+let currentEvent = null; // Single current event
+let lastEventUpdateTime = null;
+
 // Data freshness tracking
 let lastStockUpdateTime = null;
 let lastWeatherUpdateTime = null;
@@ -39,6 +43,7 @@ let successfulAPICallCount = 0;
 const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
 const WEATHER_API_URL = 'https://api.joshlei.com/v2/growagarden/weather';
 const ITEM_INFO_API_URL = 'https://api.joshlei.com/v2/growagarden/info';
+const EVENT_API_URL = 'https://api.joshlei.com/v2/growagarden/currentevent';
 
 // Cache for item info to avoid repeated API calls
 let itemInfoCache = new Map(); // item_id -> item_info
@@ -325,6 +330,79 @@ async function fetchWeatherData() {
   } catch (error) {
     console.error('❌ Error fetching weather data:', error.message);
     return new Map();
+  }
+}
+
+// Fetch current event data from the v2 API
+async function fetchEventData() {
+  try {
+    console.log('🎉 Fetching current event data from v2 API...');
+    
+    const apiKey = process.env.JSTUDIO_API_KEY;
+    if (!apiKey) {
+      console.log('⚠️ No API key configured, skipping event data');
+      return null;
+    }
+    
+    const response = await fetch(EVENT_API_URL, {
+      headers: {
+        'jstudio-key': apiKey,
+        'Accept': 'application/json',
+        'User-Agent': 'GrowAGarden-StockBot/1.0'
+      }
+    });
+
+    if (!response.ok) {
+      console.log(`⚠️ Event API returned ${response.status}, skipping event data`);
+      return null;
+    }
+
+    const data = await response.json();
+    console.log('✅ Successfully fetched event data');
+    
+    // Track successful event update
+    lastEventUpdateTime = new Date();
+    
+    return processEventData(data);
+    
+  } catch (error) {
+    console.error('❌ Error fetching event data:', error.message);
+    return null;
+  }
+}
+
+// Process event data from v2 API
+function processEventData(apiResponse) {
+  try {
+    if (!apiResponse || !apiResponse.current) {
+      console.log('⚠️ No current event in API response');
+      return null;
+    }
+
+    const eventData = apiResponse.current;
+    
+    // Override minutes with environment variable (because API currently returns wrong minutes)
+    const eventTimerMinutes = process.env.EVENT_TIMER || '00';
+    const correctedMinutes = parseInt(eventTimerMinutes);
+    
+    const processedEvent = {
+      name: eventData.name,
+      icon: eventData.icon,
+      originalHour: eventData.start?.hour || 0,
+      originalMinute: eventData.start?.minute || 0,
+      correctedMinute: correctedMinutes, // Use environment variable
+      lastUpdated: new Date().toISOString()
+    };
+
+    console.log(`🎉 Processed event: ${processedEvent.name}`);
+    console.log(`⏰ Original timing: ${eventData.start?.hour || 0}:${eventData.start?.minute || 0}`);
+    console.log(`🔧 Corrected timing: Every hour at minute ${correctedMinutes} (from EVENT_TIMER=${eventTimerMinutes})`);
+    
+    return processedEvent;
+    
+  } catch (error) {
+    console.error('❌ Error processing event data:', error);
+    return null;
   }
 }
 
@@ -1486,7 +1564,7 @@ async function sendPremiumSeedNotification(deviceToken, item) {
   }
 }
 
-// Auto-fetch stock data every 5 minutes
+// Auto-fetch stock data every 30 seconds
 async function startStockMonitoring() {
   console.log('🚀 Starting stock monitoring...');
   
@@ -1497,6 +1575,39 @@ async function startStockMonitoring() {
   setInterval(async () => {
     await updateStockData();
   }, 30 * 1000); // 30 seconds for maximum freshness
+}
+
+// Auto-fetch event data every hour
+async function startEventMonitoring() {
+  console.log('🎉 Starting event monitoring...');
+  
+  // Initial fetch
+  await updateEventData();
+  
+  // Set up interval for every hour
+  setInterval(async () => {
+    await updateEventData();
+  }, 60 * 60 * 1000); // 1 hour
+}
+
+// Update event data
+async function updateEventData() {
+  try {
+    console.log('🎉 Updating event data...');
+    
+    // Fetch new event data
+    const newEventData = await fetchEventData();
+    
+    if (newEventData) {
+      currentEvent = newEventData;
+      console.log(`🎉 Event updated: ${currentEvent.name} (every hour at :${String(currentEvent.correctedMinute).padStart(2, '0')})`);
+    } else {
+      console.log('⚠️ No event data received');
+    }
+    
+  } catch (error) {
+    console.error('❌ Error updating event data:', error);
+  }
 }
 
 // Update stock data and weather data, check for changes
@@ -1531,6 +1642,7 @@ async function updateStockData() {
 // Initialize APNs and start monitoring
 initializeAPNs();
 setTimeout(startStockMonitoring, 5000); // Start monitoring after 5 seconds
+setTimeout(startEventMonitoring, 7000); // Start event monitoring after 7 seconds
 
 // Health check endpoint
 app.get('/', (req, res) => {
@@ -1541,9 +1653,11 @@ app.get('/', (req, res) => {
     users_count: users.size,
     stock_items: stockItems.size,
     weather_events: weatherData.size,
+    current_event: currentEvent?.name || null,
     monitoring_active: true,
     api_url: STOCK_API_URL,
-    weather_api_url: WEATHER_API_URL
+    weather_api_url: WEATHER_API_URL,
+    event_api_url: EVENT_API_URL
   });
 });
 
@@ -1613,6 +1727,17 @@ app.get('/api/weather', (req, res) => {
     weather_events: weatherArray,
     total_events: weatherData.size,
     last_updated: new Date().toISOString(),
+    api_version: 'v2'
+  });
+});
+
+// Get current event data
+app.get('/api/event', (req, res) => {
+  res.json({
+    success: true,
+    current_event: currentEvent,
+    last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
+    event_timer_minutes: process.env.EVENT_TIMER || '00',
     api_version: 'v2'
   });
 });
@@ -2648,6 +2773,7 @@ app.listen(PORT, () => {
   console.log(`🔗 v2 API endpoints:`);
   console.log(`   📦 Stock: ${STOCK_API_URL}`);
   console.log(`   🌦️ Weather: ${WEATHER_API_URL}`);
+  console.log(`   🎉 Events: ${EVENT_API_URL}`);
   console.log(`   ℹ️ Info: ${ITEM_INFO_API_URL}`);
   console.log(`🔑 Team ID: ${process.env.APNS_TEAM_ID || '8U376J9B6U'}`);
   console.log(`🆔 Key ID: ${process.env.APNS_KEY_ID || 'F9J436633X'}`);
@@ -2669,10 +2795,19 @@ app.listen(PORT, () => {
   console.log(`   ✅ Dynamic images from API`);
   console.log(`   ✅ Image URL validation (stock + weather icons)`);
   console.log(`   ✅ Weather monitoring & notifications`);
+  console.log(`   ✅ Event monitoring & reminders`);
   console.log(`   ✅ Rich item metadata (icons, dates)`);
   console.log(`   ✅ Enhanced stock data structure`);
   console.log(`   ✅ Reduced hardcoded dependencies`);
   console.log(`🖼️ Image validation: Stock items + Weather icons (1hr cache)`);
+  
+  // Log event timer configuration
+  const eventTimer = process.env.EVENT_TIMER || '00';
+  console.log(`🎉 Event system configuration:`);
+  console.log(`   Event timing: Every hour at minute ${eventTimer} (EVENT_TIMER=${eventTimer})`);
+  console.log(`   Fetch interval: Every 1 hour`);
+  console.log(`   Current event: ${currentEvent?.name || 'Loading...'}`);
+  console.log(`   ⚠️ API currently returns wrong minutes (55 instead of 00) - using EVENT_TIMER override`);
   
   // Log always-shown items configuration
   const alwaysShownItems = parseAlwaysShownItems();
