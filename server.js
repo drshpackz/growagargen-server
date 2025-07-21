@@ -1632,6 +1632,9 @@ async function updateStockData() {
     // Check for weather changes and send notifications
     await checkWeatherChanges();
     
+    // Check for event notifications (new)
+    await checkEventNotifications();
+    
     console.log(`📊 Update complete - tracking ${stockItems.size} items, ${weatherData.size} weather events`);
     
   } catch (error) {
@@ -1780,7 +1783,7 @@ app.get('/api/game-data', (req, res) => {
 
 // Register device endpoint
 app.post('/api/register-device', (req, res) => {
-  const { device_token, platform, app_version, favorite_items, notification_settings } = req.body;
+  const { device_token, platform, app_version, favorite_items, notification_settings, event_notification_settings } = req.body;
   
   if (!device_token) {
     return res.status(400).json({ error: 'Device token is required' });
@@ -1794,6 +1797,7 @@ app.post('/api/register-device', (req, res) => {
     app_version: app_version || 'unknown',
     favorite_items: favorite_items || [],
     notification_settings: notification_settings || {},
+    eventNotificationSettings: event_notification_settings || {},
     last_updated: new Date().toISOString()
   });
   
@@ -1804,12 +1808,18 @@ app.post('/api/register-device', (req, res) => {
     console.log(`❤️ User favorites: ${favorite_items.join(', ')}`);
   }
   
+  // Log event notification settings for debugging
+  if (event_notification_settings) {
+    console.log(`🎉 Event settings: enabled=${event_notification_settings.enabled}, reminder_minutes=${event_notification_settings.reminder_minutes}, sound=${event_notification_settings.sound}`);
+  }
+  
   res.json({ 
     success: true, 
     message: 'Device registered successfully',
     favorites_count: favorite_items ? favorite_items.length : 0,
     apns_ready: !!apnProvider,
-    monitoring_active: true
+    monitoring_active: true,
+    event_notifications_supported: true
   });
 });
 
@@ -3165,4 +3175,132 @@ function parseSubscriptionInfo(validationResult) {
       error: 'Failed to parse subscription information'
     };
   }
-} 
+}
+
+// MARK: - Event Notification System
+
+// Check if it's time to send event notifications based on current time and user preferences
+async function checkEventNotifications() {
+  if (!currentEvent || users.size === 0) {
+    return; // No event or users to notify
+  }
+
+  const now = new Date();
+  const currentMinute = now.getUTCMinutes();
+  const currentSecond = now.getUTCSeconds();
+  const eventMinute = currentEvent.correctedMinute || 0;
+
+  // Check for exact event time and advance reminders
+  const shouldCheck = (
+    // At event time (exact minute, first 30 seconds)
+    (currentMinute === eventMinute && currentSecond <= 30) ||
+    // 1 minute before
+    (currentMinute === (eventMinute - 1 + 60) % 60 && currentSecond <= 30) ||
+    // 2 minutes before  
+    (currentMinute === (eventMinute - 2 + 60) % 60 && currentSecond <= 30) ||
+    // 5 minutes before
+    (currentMinute === (eventMinute - 5 + 60) % 60 && currentSecond <= 30) ||
+    // 10 minutes before
+    (currentMinute === (eventMinute - 10 + 60) % 60 && currentSecond <= 30) ||
+    // 15 minutes before
+    (currentMinute === (eventMinute - 15 + 60) % 60 && currentSecond <= 30)
+  );
+
+  if (!shouldCheck) {
+    return;
+  }
+
+  // Calculate how many minutes before event
+  let minutesBefore = (eventMinute - currentMinute + 60) % 60;
+  if (minutesBefore > 30) {
+    minutesBefore = 60 - minutesBefore; // Handle hour wrap-around
+  }
+
+  console.log(`🎉 EVENT NOTIFICATION CHECK: Current time ${currentMinute}:${currentSecond}, Event time :${eventMinute}, Minutes before: ${minutesBefore}`);
+  console.log(`🎉 Event: ${currentEvent.name}`);
+
+  // Send notifications to users based on their preferences
+  for (const [deviceToken, userData] of users) {
+    try {
+      await sendEventNotificationForUser(deviceToken, userData, currentEvent, minutesBefore);
+    } catch (error) {
+      console.error(`❌ Error sending event notification to ${deviceToken.substring(0, 10)}...:`, error);
+    }
+  }
+}
+
+// Send event notification to a specific user based on their preferences
+async function sendEventNotificationForUser(deviceToken, userData, event, minutesBefore) {
+  // Check if user has event notifications enabled
+  const eventSettings = userData.eventNotificationSettings || {};
+  const reminderEnabled = eventSettings.enabled ?? true; // Default to enabled
+  const reminderMinutes = eventSettings.reminder_minutes ?? 0; // Default to "at event time"
+  const eventSound = eventSettings.sound ?? 'bell'; // Default to bell
+
+  if (!reminderEnabled) {
+    console.log(`🔕 Event notifications disabled for ${deviceToken.substring(0, 10)}...`);
+    return;
+  }
+
+  // Check if this matches the user's preferred reminder timing
+  const userWantsThisReminder = (
+    (reminderMinutes === 0 && minutesBefore === 0) ||     // At event time
+    (reminderMinutes === 1 && minutesBefore === 1) ||     // 1 min before
+    (reminderMinutes === 2 && minutesBefore === 2) ||     // 2 min before
+    (reminderMinutes === 5 && minutesBefore === 5) ||     // 5 min before
+    (reminderMinutes === 10 && minutesBefore === 10) ||   // 10 min before
+    (reminderMinutes === 15 && minutesBefore === 15)      // 15 min before
+  );
+
+  if (!userWantsThisReminder) {
+    console.log(`⏰ User wants ${reminderMinutes}min reminder, current is ${minutesBefore}min - skipping for ${deviceToken.substring(0, 10)}...`);
+    return;
+  }
+
+  // Create appropriate notification message based on timing
+  const notification = new apn.Notification();
+  
+  if (minutesBefore === 0) {
+    // Event starting now
+    notification.alert = {
+      title: `🎉 ${event.name} Event Started!`,
+      body: `The ${event.name} event is now active. Join now to get special rewards!`
+    };
+  } else {
+    // Event starting soon
+    const timeText = minutesBefore === 1 ? "1 minute" : `${minutesBefore} minutes`;
+    notification.alert = {
+      title: `🎉 Event Starting Soon!`,
+      body: `${event.name} event starts in ${timeText}. Get ready for special rewards!`
+    };
+  }
+  
+  notification.payload = {
+    event_name: event.name,
+    event_icon: event.icon,
+    reminder_minutes: reminderMinutes,
+    minutes_before: minutesBefore,
+    type: 'event_reminder'
+  };
+  
+  notification.badge = 1;
+  notification.sound = `${eventSound}.mp3`;
+  notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+  
+  // Group event notifications
+  notification.threadId = 'event-reminders';
+  notification.category = 'EVENT_REMINDER';
+
+  const eventStatus = minutesBefore === 0 ? 'started' : `starting in ${minutesBefore}min`;
+  console.log(`🎉 Sending event notification to ${deviceToken.substring(0, 10)}... for ${event.name} (${eventStatus}, sound: ${eventSound})`);
+
+  const result = await apnProvider.send(notification, [deviceToken]);
+  
+  if (result.sent.length > 0) {
+    console.log(`✅ Sent event notification to ${deviceToken.substring(0, 10)}... (${eventStatus})`);
+  }
+  
+  if (result.failed.length > 0) {
+    console.log(`❌ Failed to send event notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+  }
+}
