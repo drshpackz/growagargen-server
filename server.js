@@ -938,7 +938,7 @@ async function checkWeatherChanges() {
   }
 }
 
-// Send notifications for weather changes
+// Send notifications for weather changes with smart favorites filtering
 async function sendWeatherNotifications(weatherChanges) {
   if (!apnProvider) {
     console.log('❌ APNs provider not available for weather notifications');
@@ -947,16 +947,58 @@ async function sendWeatherNotifications(weatherChanges) {
 
   const notificationsSent = [];
 
-  // Send weather notifications to all users (weather affects everyone)
+  console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Starting weather notification check for ${weatherChanges.length} changes...`);
+  console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Weather changes:`, weatherChanges.map(w => `${w.weatherName} (${w.isActive ? 'active' : 'ended'})`));
+
+  // Send weather notifications based on user preferences
   for (const [deviceToken, userData] of users) {
     if (!userData.notification_settings?.enabled) {
       console.log(`❌ Notifications disabled for ${deviceToken.substring(0, 10)}...`);
       continue;
     }
 
+    // Check weather notification settings
+    const weatherSettings = userData.weatherNotificationSettings || {};
+    const weatherEnabled = weatherSettings.enabled !== false; // Default to true
+    const weatherMode = weatherSettings.mode || 'all'; // Default to 'all'
+
+    if (!weatherEnabled) {
+      console.log(`🌦️ Weather notifications disabled for ${deviceToken.substring(0, 10)}...`);
+      continue;
+    }
+
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User ${deviceToken.substring(0, 10)}... mode: ${weatherMode}`);
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User weather favorites:`, userData.favorite_weather_events || []);
+
+    // Filter weather changes based on user preference
+    let relevantWeatherChanges = weatherChanges;
+
+    if (weatherMode === 'favorites') {
+      const userWeatherFavorites = userData.favorite_weather_events || [];
+      
+      if (userWeatherFavorites.length === 0) {
+        console.log(`🌦️ User ${deviceToken.substring(0, 10)}... has favorites mode but no favorited weather events - skipping`);
+        continue;
+      }
+
+      // Only include weather changes for favorited weather events
+      relevantWeatherChanges = weatherChanges.filter(change => {
+        const isFavorited = userWeatherFavorites.includes(change.weatherId);
+        console.log(`🌦️ Weather ${change.weatherName} (${change.weatherId}) favorited: ${isFavorited}`);
+        return isFavorited;
+      });
+
+      if (relevantWeatherChanges.length === 0) {
+        console.log(`🌦️ No favorited weather changes for ${deviceToken.substring(0, 10)}... - skipping`);
+        continue;
+      }
+    }
+
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Sending ${relevantWeatherChanges.length} relevant weather changes to ${deviceToken.substring(0, 10)}...`);
+
     // Group weather changes by active/inactive
-    const activeWeather = weatherChanges.filter(w => w.isActive);
-    const inactiveWeather = weatherChanges.filter(w => !w.isActive);
+    const activeWeather = relevantWeatherChanges.filter(w => w.isActive);
+    const inactiveWeather = relevantWeatherChanges.filter(w => !w.isActive);
 
     // Send notification for active weather events
     if (activeWeather.length > 0) {
@@ -1783,7 +1825,7 @@ app.get('/api/game-data', (req, res) => {
 
 // Register device endpoint
 app.post('/api/register-device', (req, res) => {
-  const { device_token, platform, app_version, favorite_items, notification_settings, event_notification_settings } = req.body;
+  const { device_token, platform, app_version, favorite_items, favorite_weather_events, notification_settings, event_notification_settings, weather_notification_settings } = req.body;
   
   if (!device_token) {
     return res.status(400).json({ error: 'Device token is required' });
@@ -1796,8 +1838,10 @@ app.post('/api/register-device', (req, res) => {
     platform: platform || 'ios',
     app_version: app_version || 'unknown',
     favorite_items: favorite_items || [],
+    favorite_weather_events: favorite_weather_events || [],
     notification_settings: notification_settings || {},
     eventNotificationSettings: event_notification_settings || {},
+    weatherNotificationSettings: weather_notification_settings || {},
     last_updated: new Date().toISOString()
   });
   
@@ -1808,9 +1852,19 @@ app.post('/api/register-device', (req, res) => {
     console.log(`❤️ User favorites: ${favorite_items.join(', ')}`);
   }
   
+  // Log user's favorite weather events for debugging
+  if (favorite_weather_events && favorite_weather_events.length > 0) {
+    console.log(`🌦️❤️ User weather favorites: ${favorite_weather_events.join(', ')}`);
+  }
+  
   // Log event notification settings for debugging
   if (event_notification_settings) {
     console.log(`🎉 Event settings: enabled=${event_notification_settings.enabled}, reminder_minutes=${event_notification_settings.reminder_minutes}, sound=${event_notification_settings.sound}`);
+  }
+  
+  // Log weather notification settings for debugging
+  if (weather_notification_settings) {
+    console.log(`🌦️ Weather settings: enabled=${weather_notification_settings.enabled}, mode=${weather_notification_settings.mode}, sound=${weather_notification_settings.sound}`);
   }
   
   res.json({ 
@@ -2173,11 +2227,14 @@ app.get('/api/debug-users-favorites', (req, res) => {
         device_token_preview: deviceToken.substring(0, 10) + '...',
         favorite_items: userData.favorite_items || [],
         favorites_count: (userData.favorite_items || []).length,
+        favorite_weather_events: userData.favorite_weather_events || [],
+        weather_favorites_count: (userData.favorite_weather_events || []).length,
         notification_enabled: userData.notification_settings?.enabled || false,
         sound_enabled: userData.notification_settings?.sound || false,
         selected_sound: userData.notification_settings?.selected_sound || 'notify', // DEPRECATED
         category_sounds: userData.notification_settings?.category_sounds || { stock: 'bell', weather: 'notify' }, // NEW
         notification_settings: userData.notification_settings || {},
+        weather_notification_settings: userData.weatherNotificationSettings || {},
         registered_at: userData.registered_at,
         updated_at: userData.updated_at
       });
