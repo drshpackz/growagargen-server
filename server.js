@@ -12,6 +12,12 @@ app.use(cors());
 // Serve static files (for the banner HTML page)
 app.use(express.static('public'));
 
+// Serve app-ads.txt for AdMob verification
+app.get('/app-ads.txt', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('google.com, pub-3555260852894621, DIRECT, f08c47fec0942fa0');
+});
+
 // In-memory storage for demo (replace with real database later)
 let users = new Map(); // device_token -> user data
 let stockItems = new Map(); // item_name -> quantity
