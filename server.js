@@ -492,9 +492,11 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
-      // Get rarity with priority: Override > API > null
+      // Get rarity with priority: Override > API > Hardcoded > null
       const rarityOverride = getRarityOverride(item.item_id);
-      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      const apiRarity = itemInfo?.rarity;
+      const hardcodedRarity = getItemRarity(item.display_name);
+      const finalRarity = rarityOverride || apiRarity || hardcodedRarity;
       
       const itemData = {
         quantity: item.quantity || 0,
@@ -504,7 +506,7 @@ async function processStockData(apiResponse) {
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix,
-        rarity: finalRarity  // Priority: Override > API > null
+        rarity: finalRarity  // Priority: Override > API > Hardcoded
       };
       
       processedItems.set(item.display_name, itemData);
@@ -529,9 +531,11 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
-      // Get rarity with priority: Override > API > null
+      // Get rarity with priority: Override > API > Hardcoded > null
       const rarityOverride = getRarityOverride(item.item_id);
-      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      const apiRarity = itemInfo?.rarity;
+      const hardcodedRarity = getItemRarity(item.display_name);
+      const finalRarity = rarityOverride || apiRarity || hardcodedRarity;
       
       const itemData = {
         quantity: item.quantity || 0,
@@ -561,9 +565,11 @@ async function processStockData(apiResponse) {
         itemInfo = await fetchItemInfo(item.item_id);
       }
       
-      // Get rarity with priority: Override > API > null
+      // Get rarity with priority: Override > API > Hardcoded > null
       const rarityOverride = getRarityOverride(item.item_id);
-      const finalRarity = rarityOverride || itemInfo?.rarity || null;
+      const apiRarity = itemInfo?.rarity;
+      const hardcodedRarity = getItemRarity(item.display_name);
+      const finalRarity = rarityOverride || apiRarity || hardcodedRarity;
       
       const itemData = {
         quantity: item.quantity || 0,
@@ -573,7 +579,7 @@ async function processStockData(apiResponse) {
         icon: hasValidImage ? item.icon : null, // Only include valid image URLs
         startDate: item.start_date_unix,
         endDate: item.end_date_unix,
-        rarity: finalRarity  // Priority: Override > API > null
+        rarity: finalRarity  // Priority: Override > API > Hardcoded
       };
       
       processedItems.set(item.display_name, itemData);
@@ -597,9 +603,11 @@ async function processStockData(apiResponse) {
           itemInfo = await fetchItemInfo(item.item_id);
         }
         
-        // Get rarity with priority: Override > API > null
+        // Get rarity with priority: Override > API > Hardcoded > null
         const rarityOverride = getRarityOverride(item.item_id);
-        const finalRarity = rarityOverride || itemInfo?.rarity || null;
+        const apiRarity = itemInfo?.rarity;
+        const hardcodedRarity = getItemRarity(item.display_name);
+        const finalRarity = rarityOverride || apiRarity || hardcodedRarity;
         
         if (existingEgg) {
           // Aggregate quantities for duplicate egg types
@@ -623,7 +631,7 @@ async function processStockData(apiResponse) {
             icon: hasValidImage ? item.icon : null, // Only include valid image URLs
             startDate: item.start_date_unix,
             endDate: item.end_date_unix,
-            rarity: finalRarity  // Priority: Override > API > null
+            rarity: finalRarity  // Priority: Override > API > Hardcoded
           };
           
           processedItems.set(item.display_name, itemData);
