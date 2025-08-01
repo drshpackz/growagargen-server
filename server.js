@@ -1026,15 +1026,22 @@ async function sendWeatherNotifications(weatherChanges) {
       }
     }
 
-    // Send notification for ended weather events (optional, less important)
+    // Send notification for ended weather events (only if user enabled weather end notifications)
     if (inactiveWeather.length > 0) {
-      try {
-        await sendWeatherNotification(deviceToken, inactiveWeather, 'ended');
-        if (!notificationsSent.includes(deviceToken.substring(0, 10))) {
-          notificationsSent.push(deviceToken.substring(0, 10));
+      const weatherEndEnabled = weatherSettings.end_notifications_enabled === true; // Default to false
+      
+      if (weatherEndEnabled) {
+        console.log(`🌦️ Weather end notifications enabled for ${deviceToken.substring(0, 10)}... - sending ${inactiveWeather.length} ended weather notifications`);
+        try {
+          await sendWeatherNotification(deviceToken, inactiveWeather, 'ended');
+          if (!notificationsSent.includes(deviceToken.substring(0, 10))) {
+            notificationsSent.push(deviceToken.substring(0, 10));
+          }
+        } catch (error) {
+          console.error(`❌ Error sending ended weather notification to ${deviceToken.substring(0, 10)}...:`, error);
         }
-      } catch (error) {
-        console.error(`❌ Error sending ended weather notification to ${deviceToken.substring(0, 10)}...:`, error);
+      } else {
+        console.log(`🌦️ Weather end notifications disabled for ${deviceToken.substring(0, 10)}... - skipping ${inactiveWeather.length} ended weather notifications`);
       }
     }
   }
