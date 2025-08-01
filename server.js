@@ -2291,6 +2291,22 @@ app.get('/api/stats', (req, res) => {
   res.json(stats);
 });
 
+// Discord channel info endpoint
+app.get('/api/discord-info', (req, res) => {
+  try {
+    const discordInfo = {
+      channel_name: process.env.DISCORD_CHANNEL_NAME || 'GAGHUB: Live Stocks & Trading',
+      channel_link: process.env.DISCORD_CHANNEL_LINK || 'https://discord.com/invite',
+      profile_image_url: process.env.DISCORD_CHANNEL_PROFILE_PNG_URL || 'https://gaghub.com/public/imagelogo.png'
+    };
+    
+    res.json(discordInfo);
+  } catch (error) {
+    console.error('❌ Error fetching Discord info:', error);
+    res.status(500).json({ error: 'Failed to fetch Discord information' });
+  }
+});
+
 // Data freshness endpoint - shows how fresh the current data is
 app.get('/api/data-freshness', (req, res) => {
   const now = new Date();
