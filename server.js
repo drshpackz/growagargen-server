@@ -2045,6 +2045,31 @@ app.post('/api/debug-automatic-monitoring', async (req, res) => {
   }
 });
 
+// Get full device tokens for debugging
+app.get('/api/debug-device-tokens', (req, res) => {
+  try {
+    const tokens = [];
+    for (const [deviceToken, userData] of users.entries()) {
+      tokens.push({
+        full_token: deviceToken,
+        preview: deviceToken.substring(0, 10) + '...',
+        platform: userData.platform,
+        app_version: userData.app_version,
+        favorite_count: userData.favorite_items?.length || 0,
+        registered_at: userData.last_updated
+      });
+    }
+    
+    res.json({
+      total_users: users.size,
+      device_tokens: tokens
+    });
+  } catch (error) {
+    console.error('❌ Error in debug-device-tokens:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test notification to ALL users endpoint
 app.post('/api/test-all-users', async (req, res) => {
   try {
