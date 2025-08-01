@@ -2045,6 +2045,89 @@ app.post('/api/debug-automatic-monitoring', async (req, res) => {
   }
 });
 
+// Test notification to ALL users endpoint
+app.post('/api/test-all-users', async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!apnProvider) {
+      return res.status(500).json({ error: 'APNs not configured' });
+    }
+
+    const testMessage = message || 'this is just a test';
+    let successCount = 0;
+    let failureCount = 0;
+    const results = [];
+
+    console.log(`📧 TEST: Sending test notifications to all ${users.size} registered users`);
+
+    for (const [deviceToken, userData] of users.entries()) {
+      try {
+        const notification = new apn.Notification();
+        notification.alert = {
+          title: '🧪 Test Notification',
+          body: testMessage
+        };
+        
+        notification.payload = {
+          category: 'Test',
+          type: 'test_notification'
+        };
+        
+        notification.badge = 1;
+        notification.sound = getUserSoundPreference(deviceToken, 'stock');
+        notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+        notification.threadId = 'test-notifications';
+        notification.category = 'TEST_NOTIFICATION';
+
+        const result = await apnProvider.send(notification, [deviceToken]);
+        
+        if (result.sent.length > 0) {
+          console.log(`✅ Test notification sent to ${deviceToken.substring(0, 10)}...`);
+          successCount++;
+          results.push({ device: deviceToken.substring(0, 10) + '...', status: 'sent' });
+        }
+        
+        if (result.failed.length > 0) {
+          const failure = result.failed[0];
+          console.log(`❌ Test notification failed to ${deviceToken.substring(0, 10)}...: ${failure.response?.reason || 'Unknown'}`);
+          failureCount++;
+          results.push({ 
+            device: deviceToken.substring(0, 10) + '...', 
+            status: 'failed', 
+            reason: failure.response?.reason || 'Unknown' 
+          });
+          
+          // Auto-cleanup bad tokens
+          if (failure.response?.reason === 'BadDeviceToken' || failure.response?.reason === 'Unregistered') {
+            console.log(`🗑️ CLEANUP: Removing invalid device token ${deviceToken.substring(0, 10)}... from users`);
+            users.delete(deviceToken);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ Error sending test notification to ${deviceToken.substring(0, 10)}...:`, error);
+        failureCount++;
+        results.push({ 
+          device: deviceToken.substring(0, 10) + '...', 
+          status: 'error', 
+          reason: error.message 
+        });
+      }
+    }
+
+    res.json({
+      message: `Test notifications sent to ${users.size} users`,
+      success_count: successCount,
+      failure_count: failureCount,
+      results: results
+    });
+
+  } catch (error) {
+    console.error('❌ Error in test-all-users:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test notification endpoint
 app.post('/api/test-notification', async (req, res) => {
   try {
