@@ -1098,7 +1098,15 @@ async function sendWeatherNotification(deviceToken, weatherEvents, type) {
   }
   
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send weather notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+    const failure = result.failed[0];
+    console.log(`❌ Failed to send weather notification to ${deviceToken.substring(0, 10)}...: ${failure.error || 'Unknown'}`);
+    console.log(`❌ DEBUG: Status: ${failure.status}, Reason: ${failure.response?.reason || 'Unknown'}`);
+    
+    // Auto-cleanup bad device tokens
+    if (failure.response?.reason === 'BadDeviceToken' || failure.response?.reason === 'Unregistered') {
+      console.log(`🗑️ CLEANUP: Removing invalid device token ${deviceToken.substring(0, 10)}... from users`);
+      users.delete(deviceToken);
+    }
   }
 }
 
