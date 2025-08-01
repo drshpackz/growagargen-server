@@ -1859,6 +1859,24 @@ app.post('/api/register-device', (req, res) => {
   
   console.log(`📱 Device registration: ${device_token.substring(0, 10)}... (${platform}) v${app_version}`);
   
+  // Check if this is a favorites update by comparing with existing data
+  const existingUser = users.get(device_token);
+  const oldFavorites = existingUser?.favorite_items || [];
+  const newFavorites = favorite_items || [];
+  
+  // Track favorites changes for immediate notification updates
+  if (existingUser && JSON.stringify(oldFavorites.sort()) !== JSON.stringify(newFavorites.sort())) {
+    const added = newFavorites.filter(item => !oldFavorites.includes(item));
+    const removed = oldFavorites.filter(item => !newFavorites.includes(item));
+    
+    if (added.length > 0) {
+      console.log(`➕ FAVORITES ADDED by ${device_token.substring(0, 10)}...: ${added.join(', ')}`);
+    }
+    if (removed.length > 0) {
+      console.log(`➖ FAVORITES REMOVED by ${device_token.substring(0, 10)}...: ${removed.join(', ')} - notifications will stop immediately`);
+    }
+  }
+  
   // Store user data
   users.set(device_token, {
     platform: platform || 'ios',
@@ -1876,6 +1894,8 @@ app.post('/api/register-device', (req, res) => {
   // Log user's favorite items for debugging
   if (favorite_items && favorite_items.length > 0) {
     console.log(`❤️ User favorites: ${favorite_items.join(', ')}`);
+  } else if (favorite_items && favorite_items.length === 0) {
+    console.log(`💔 User has no favorites - no notifications will be sent`);
   }
   
   // Log user's favorite weather events for debugging
