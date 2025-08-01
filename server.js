@@ -2040,82 +2040,6 @@ app.post('/api/debug-automatic-monitoring', async (req, res) => {
   }
 });
 
-// Manual favorites availability check - send notifications for all favorited items currently in stock
-app.post('/api/check-favorites', async (req, res) => {
-  try {
-    const { device_token } = req.body;
-    
-    if (!apnProvider) {
-      return res.status(500).json({ error: 'APNs not configured' });
-    }
-
-    if (!device_token) {
-      return res.status(400).json({ error: 'Device token required' });
-    }
-
-    // Find user data
-    const userData = users.get(device_token);
-    if (!userData) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (!userData.notification_settings?.enabled) {
-      return res.status(200).json({ message: 'Notifications disabled for this user' });
-    }
-
-    // Check favorites currently in stock
-    const availableItems = [];
-    const favoriteItems = userData.favorite_items || [];
-    
-    console.log(`🔍 MANUAL CHECK: Checking ${favoriteItems.length} favorites for user ${device_token.substring(0, 10)}...`);
-    
-    for (const favoriteItem of favoriteItems) {
-      const currentData = stockItems.get(favoriteItem);
-      const currentQuantity = currentData?.quantity || 0;
-      
-      if (currentQuantity > 0) {
-        const rarity = getItemRarity(favoriteItem);
-        const rarityInfo = getRarityInfo(rarity);
-        
-        // Only notify for items that should send notifications
-        if (rarityInfo.shouldNotify) {
-          availableItems.push({
-            name: currentData.originalName || favoriteItem,
-            quantity: currentQuantity,
-            rarity: rarity,
-            rarityEmoji: rarityInfo.emoji
-          });
-          console.log(`✅ MANUAL CHECK: ${favoriteItem} available (${currentQuantity}) - will notify`);
-        } else {
-          console.log(`🚫 MANUAL CHECK: ${favoriteItem} available but ${rarity} rarity filtered out`);
-        }
-      } else {
-        console.log(`📉 MANUAL CHECK: ${favoriteItem} out of stock`);
-      }
-    }
-
-    if (availableItems.length === 0) {
-      return res.json({ 
-        message: 'No favorited items currently available',
-        checked_favorites: favoriteItems.length
-      });
-    }
-
-    // Send notification for available items
-    await sendStockNotifications(availableItems);
-    
-    res.json({ 
-      message: `Sent notification for ${availableItems.length} available items`,
-      available_items: availableItems.map(item => `${item.name} (${item.quantity})`),
-      checked_favorites: favoriteItems.length
-    });
-
-  } catch (error) {
-    console.error('❌ Error in manual favorites check:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Test notification endpoint
 app.post('/api/test-notification', async (req, res) => {
   try {
@@ -3448,6 +3372,10 @@ async function sendEventNotificationForUser(deviceToken, userData, event, minute
   }
   
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send event notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
+    const failureReason = result.failed[0];
+    console.log(`❌ Failed to send event notification to ${deviceToken.substring(0, 10)}...:`);
+    console.log(`   Error: ${failureReason.error || 'Unknown error'}`);
+    console.log(`   Status: ${failureReason.status || 'Unknown status'}`);
+    console.log(`   Response: ${JSON.stringify(failureReason.response || 'No response')}`);
   }
 }
