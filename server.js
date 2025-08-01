@@ -1570,10 +1570,15 @@ async function sendCategoryNotification(deviceToken, category, items) {
   }
   
   if (result.failed.length > 0) {
-    console.log(`❌ Failed to send ${categoryName} notification to ${deviceToken.substring(0, 10)}...: ${result.failed[0].error}`);
-    console.log(`❌ DEBUG: Full failure result:`, JSON.stringify(result.failed[0], null, 2));
-    console.log(`❌ DEBUG: Error status: ${result.failed[0].status}`);
-    console.log(`❌ DEBUG: Error response: ${result.failed[0].response}`);
+    const failure = result.failed[0];
+    console.log(`❌ Failed to send ${categoryName} notification to ${deviceToken.substring(0, 10)}...: ${failure.error || 'Unknown'}`);
+    console.log(`❌ DEBUG: Status: ${failure.status}, Reason: ${failure.response?.reason || 'Unknown'}`);
+    
+    // Auto-cleanup bad device tokens
+    if (failure.response?.reason === 'BadDeviceToken' || failure.response?.reason === 'Unregistered') {
+      console.log(`🗑️ CLEANUP: Removing invalid device token ${deviceToken.substring(0, 10)}... from users`);
+      users.delete(deviceToken);
+    }
   }
 }
 
@@ -3372,10 +3377,14 @@ async function sendEventNotificationForUser(deviceToken, userData, event, minute
   }
   
   if (result.failed.length > 0) {
-    const failureReason = result.failed[0];
-    console.log(`❌ Failed to send event notification to ${deviceToken.substring(0, 10)}...:`);
-    console.log(`   Error: ${failureReason.error || 'Unknown error'}`);
-    console.log(`   Status: ${failureReason.status || 'Unknown status'}`);
-    console.log(`   Response: ${JSON.stringify(failureReason.response || 'No response')}`);
+    const failure = result.failed[0];
+    console.log(`❌ Failed to send event notification to ${deviceToken.substring(0, 10)}...: ${failure.error || 'Unknown'}`);
+    console.log(`❌ DEBUG: Status: ${failure.status}, Reason: ${failure.response?.reason || 'Unknown'}`);
+    
+    // Auto-cleanup bad device tokens
+    if (failure.response?.reason === 'BadDeviceToken' || failure.response?.reason === 'Unregistered') {
+      console.log(`🗑️ CLEANUP: Removing invalid device token ${deviceToken.substring(0, 10)}... from users`);
+      users.delete(deviceToken);
+    }
   }
 }
