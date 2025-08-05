@@ -1812,13 +1812,65 @@ app.get('/api/weather', (req, res) => {
 
 // Get current event data
 app.get('/api/event', (req, res) => {
-  res.json({
-    success: true,
-    current_event: currentEvent,
-    last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
-    event_timer_minutes: process.env.EVENT_TIMER || '00',
-    api_version: 'v2'
-  });
+  try {
+    console.log('🎨 Event API called - Building theme data...');
+    console.log('🌈 ENV Variables:');
+    console.log(`   PRIMARY_COLOR: ${process.env.EVENT_THEME_PRIMARY_COLOR || 'undefined'}`);
+    console.log(`   SECONDARY_COLOR: ${process.env.EVENT_THEME_SECONDARY_COLOR || 'undefined'}`);
+    console.log(`   ACCENT_COLOR: ${process.env.EVENT_THEME_ACCENT_COLOR || 'undefined'}`);
+    console.log(`   PARTICLE_TYPE: ${process.env.EVENT_PARTICLE_TYPE || 'undefined'}`);
+    console.log(`   CARD_STYLE: ${process.env.EVENT_CARD_STYLE || 'undefined'}`);
+    console.log(`   BACKGROUND_GRADIENT: ${process.env.EVENT_BACKGROUND_GRADIENT || 'undefined'}`);
+    
+    // Parse background gradient safely
+    let backgroundGradient;
+    try {
+      backgroundGradient = JSON.parse(process.env.EVENT_BACKGROUND_GRADIENT || '["#1a1a2e", "#16213e", "#0f0f23"]');
+    } catch (error) {
+      console.log('⚠️ Error parsing EVENT_BACKGROUND_GRADIENT, using default');
+      backgroundGradient = ["#1a1a2e", "#16213e", "#0f0f23"];
+    }
+    
+    // Enhanced current event with theme data
+    const enhancedCurrentEvent = currentEvent ? {
+      ...currentEvent,
+      theme: {
+        primaryColor: process.env.EVENT_THEME_PRIMARY_COLOR || "#7B68EE",
+        secondaryColor: process.env.EVENT_THEME_SECONDARY_COLOR || "#4ECDC4", 
+        accentColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700",
+        backgroundGradient: backgroundGradient,
+        particleType: process.env.EVENT_PARTICLE_TYPE || "none",
+        cardStyle: process.env.EVENT_CARD_STYLE || "default",
+        wallpaperUrl: process.env.EVENT_WALLPAPER_URL || null,
+        glowColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700"
+      }
+    } : null;
+
+    console.log(`🎯 Current Event: ${currentEvent ? currentEvent.name : 'null'}`);
+    console.log(`🎨 Theme Data: ${enhancedCurrentEvent?.theme ? 'Added' : 'Not added'}`);
+
+    const response = {
+      success: true,
+      current_event: enhancedCurrentEvent,
+      last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
+      event_timer_minutes: process.env.EVENT_TIMER || '00',
+      api_version: 'v2'
+    };
+    
+    console.log('📤 Sending response with theme data');
+    res.json(response);
+    
+  } catch (error) {
+    console.error('❌ Error building event response:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      current_event: null,
+      last_updated: null,
+      event_timer_minutes: process.env.EVENT_TIMER || '00',
+      api_version: 'v2'
+    });
+  }
 });
 
 // Get combined stock and weather data
