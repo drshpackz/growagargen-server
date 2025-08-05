@@ -1813,15 +1813,6 @@ app.get('/api/weather', (req, res) => {
 // Get current event data
 app.get('/api/event', (req, res) => {
   try {
-    console.log('🎨 Event API called - Building theme data...');
-    console.log('🌈 ENV Variables:');
-    console.log(`   PRIMARY_COLOR: ${process.env.EVENT_THEME_PRIMARY_COLOR || 'undefined'}`);
-    console.log(`   SECONDARY_COLOR: ${process.env.EVENT_THEME_SECONDARY_COLOR || 'undefined'}`);
-    console.log(`   ACCENT_COLOR: ${process.env.EVENT_THEME_ACCENT_COLOR || 'undefined'}`);
-    console.log(`   PARTICLE_TYPE: ${process.env.EVENT_PARTICLE_TYPE || 'undefined'}`);
-    console.log(`   CARD_STYLE: ${process.env.EVENT_CARD_STYLE || 'undefined'}`);
-    console.log(`   BACKGROUND_GRADIENT: ${process.env.EVENT_BACKGROUND_GRADIENT || 'undefined'}`);
-    
     // Parse background gradient safely
     let backgroundGradient;
     try {
@@ -1831,7 +1822,7 @@ app.get('/api/event', (req, res) => {
       backgroundGradient = ["#1a1a2e", "#16213e", "#0f0f23"];
     }
     
-    // Enhanced current event with theme data
+    // Enhanced current event with theme data and color variations
     const enhancedCurrentEvent = currentEvent ? {
       ...currentEvent,
       theme: {
@@ -1842,23 +1833,21 @@ app.get('/api/event', (req, res) => {
         particleType: process.env.EVENT_PARTICLE_TYPE || "none",
         cardStyle: process.env.EVENT_CARD_STYLE || "default",
         wallpaperUrl: process.env.EVENT_WALLPAPER_URL || null,
-        glowColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700"
+        glowColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700",
+        // Additional color variations for different blocks
+        eventCardColor: process.env.EVENT_CARD_COLOR || process.env.EVENT_THEME_PRIMARY_COLOR || "#7B68EE",
+        settingsCardColor: process.env.SETTINGS_CARD_COLOR || process.env.EVENT_THEME_SECONDARY_COLOR || "#4ECDC4",
+        colorVariation: process.env.EVENT_COLOR_VARIATION || "default" // options: default, gradient, rainbow, monochrome
       }
     } : null;
 
-    console.log(`🎯 Current Event: ${currentEvent ? currentEvent.name : 'null'}`);
-    console.log(`🎨 Theme Data: ${enhancedCurrentEvent?.theme ? 'Added' : 'Not added'}`);
-
-    const response = {
+    res.json({
       success: true,
       current_event: enhancedCurrentEvent,
       last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
       event_timer_minutes: process.env.EVENT_TIMER || '00',
       api_version: 'v2'
-    };
-    
-    console.log('📤 Sending response with theme data');
-    res.json(response);
+    });
     
   } catch (error) {
     console.error('❌ Error building event response:', error);
