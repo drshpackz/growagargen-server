@@ -44,6 +44,10 @@ let lastWeatherUpdateTime = null;
 let lastAPICallTime = null;
 let apiCallCount = 0;
 let successfulAPICallCount = 0;
+let isUpdateInProgress = false; // prevent overlapping updates
+let tmRetryState = { attempts: 0, lastWindowStartUnix: null, timer: null }; // traveling merchant retry
+// Track per-process last TM window alert to avoid repeated sends after data refreshes
+let lastTmAlertWindowUnix = null;
 
 // New v2 API endpoints
 const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
@@ -90,6 +94,20 @@ function parseRarityFixes() {
   }
   
   return rarityFixes;
+}
+
+// Parse list of weather names to ignore (comma-separated, case-insensitive)
+function parseIgnoredWeatherNames() {
+  try {
+    const raw = process.env.IGNOREWEATHER || '';
+    const names = raw
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
+    return new Set(names);
+  } catch (e) {
+    return new Set();
+  }
 }
 
 // Get rarity override for an item (takes priority over API)
@@ -641,8 +659,56 @@ async function processStockData(apiResponse) {
     }
   }
 
+  // Process traveling merchant stock from v2 API
+  if (
+    apiResponse.travelingmerchant_stock &&
+    Array.isArray(apiResponse.travelingmerchant_stock.stock)
+  ) {
+    const merchantName = apiResponse.travelingmerchant_stock.merchantName || 'Traveling Merchant';
+    for (const item of apiResponse.travelingmerchant_stock.stock) {
+      // Validate image URL before including the item
+      const hasValidImage = await validateImageURL(item.icon);
+
+      // Fetch item info to get rarity (if available)
+      let itemInfo = null;
+      if (item.item_id) {
+        itemInfo = await fetchItemInfo(item.item_id);
+      }
+
+      // Get rarity with priority: Override > API > Hardcoded > null
+      const rarityOverride = getRarityOverride(item.item_id);
+      const apiRarity = itemInfo?.rarity;
+      const hardcodedRarity = getItemRarity(item.display_name);
+      const finalRarity = rarityOverride || apiRarity || hardcodedRarity;
+
+      const itemData = {
+        quantity: item.quantity || 0,
+        category: 'traveling_merchant',
+        itemId: item.item_id,
+        displayName: item.display_name,
+        icon: hasValidImage ? item.icon : null,
+        startDate: item.start_date_unix,
+        endDate: item.end_date_unix,
+        rarity: finalRarity,
+        merchant: merchantName
+      };
+
+      processedItems.set(item.display_name, itemData);
+      console.log(
+        `🧳 Processed traveling merchant: ${item.display_name} (qty: ${item.quantity}, rarity: ${itemData.rarity || 'unknown'}) by ${merchantName}`
+      );
+    }
+  }
+
   console.log(`📊 Processed ${processedItems.size} total items dynamically from API`);
-  console.log(`📊 Breakdown: ${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic`);
+  console.log(
+    `📊 Breakdown: ` +
+      `${Array.from(processedItems.values()).filter(i => i.category === 'seeds').length} seeds, ` +
+      `${Array.from(processedItems.values()).filter(i => i.category === 'gear').length} gear, ` +
+      `${Array.from(processedItems.values()).filter(i => i.category === 'eggs').length} eggs, ` +
+      `${Array.from(processedItems.values()).filter(i => i.category === 'cosmetic').length} cosmetic, ` +
+      `${Array.from(processedItems.values()).filter(i => i.category === 'traveling_merchant').length} traveling_merchant`
+  );
   
   // Add always-shown items from environment variables (out of stock but available for favoriting)
   await addAlwaysShownItems(processedItems);
@@ -657,6 +723,7 @@ async function processStockData(apiResponse) {
 // Process weather data from v2 API
 async function processWeatherData(apiResponse) {
   const processedWeather = new Map();
+  const ignoredWeather = parseIgnoredWeatherNames();
   
   if (!apiResponse || !apiResponse.weather || !Array.isArray(apiResponse.weather)) {
     console.log('⚠️ No weather data in API response');
@@ -664,6 +731,12 @@ async function processWeatherData(apiResponse) {
   }
 
   for (const weather of apiResponse.weather) {
+    // Skip ignored weather by name (case-insensitive)
+    const wName = (weather.weather_name || '').toLowerCase();
+    if (ignoredWeather.has(wName)) {
+      console.log(`🚫 IGNOREWEATHER: Skipping weather '${weather.weather_name}'`);
+      continue;
+    }
     // Validate weather icon URL before including it
     const hasValidIcon = await validateImageURL(weather.icon);
     
@@ -900,6 +973,7 @@ async function checkWeatherChanges() {
     return;
   }
 
+  const ignoredWeather = parseIgnoredWeatherNames();
   console.log(`🌦️ WEATHER MONITORING DEBUG: Starting weather change check...`);
   console.log(`🌦️ WEATHER MONITORING DEBUG: Previous weather events: ${previousWeatherData.size}`);
   console.log(`🌦️ WEATHER MONITORING DEBUG: Current weather events: ${weatherData.size}`);
@@ -908,6 +982,9 @@ async function checkWeatherChanges() {
 
   // Compare current weather with previous weather
   for (const [weatherId, currentWeather] of weatherData) {
+    if (ignoredWeather.has((currentWeather.weatherName || '').toLowerCase())) {
+      continue; // Skip ignored weather entirely
+    }
     const previousWeather = previousWeatherData.get(weatherId);
     
     // Check if weather status changed
@@ -929,6 +1006,9 @@ async function checkWeatherChanges() {
 
   // Check for weather events that ended (no longer in current data)
   for (const [weatherId, previousWeather] of previousWeatherData) {
+    if (ignoredWeather.has((previousWeather.weatherName || '').toLowerCase())) {
+      continue;
+    }
     if (!weatherData.has(weatherId) && previousWeather.active) {
       const statusChange = {
         weatherId: weatherId,
@@ -963,6 +1043,7 @@ async function sendWeatherNotifications(weatherChanges) {
 
   console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Starting weather notification check for ${weatherChanges.length} changes...`);
   console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Weather changes:`, weatherChanges.map(w => `${w.weatherName} (${w.isActive ? 'active' : 'ended'})`));
+  console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Total registered users: ${users.size}`);
 
   // Send weather notifications based on user preferences
   for (const [deviceToken, userData] of users) {
@@ -970,6 +1051,8 @@ async function sendWeatherNotifications(weatherChanges) {
       console.log(`❌ Notifications disabled for ${deviceToken.substring(0, 10)}...`);
       continue;
     }
+
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Processing user ${deviceToken.substring(0, 10)}...`);
 
     // Check weather notification settings
     const weatherSettings = userData.weatherNotificationSettings || {};
@@ -983,6 +1066,8 @@ async function sendWeatherNotifications(weatherChanges) {
 
     console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User ${deviceToken.substring(0, 10)}... mode: ${weatherMode}`);
     console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User weather favorites:`, userData.favorite_weather_events || []);
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Weather settings:`, weatherSettings);
+    console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Available weather changes:`, weatherChanges.map(w => `${w.weatherName} (${w.weatherId})`));
 
     // Filter weather changes based on user preference
     let relevantWeatherChanges = weatherChanges;
@@ -990,17 +1075,22 @@ async function sendWeatherNotifications(weatherChanges) {
     if (weatherMode === 'favorites') {
       const userWeatherFavorites = userData.favorite_weather_events || [];
       
+      console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User is in favorites mode`);
+      console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User weather favorites: [${userWeatherFavorites.join(', ')}]`);
+      
       if (userWeatherFavorites.length === 0) {
         console.log(`🌦️ User ${deviceToken.substring(0, 10)}... has favorites mode but no favorited weather events - skipping`);
         continue;
       }
 
       // Only include weather changes for favorited weather events
+      console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Filtering weather changes for favorites mode...`);
       relevantWeatherChanges = weatherChanges.filter(change => {
         const isFavorited = userWeatherFavorites.includes(change.weatherId);
         console.log(`🌦️ Weather ${change.weatherName} (${change.weatherId}) favorited: ${isFavorited}`);
         return isFavorited;
       });
+      console.log(`🌦️ WEATHER NOTIFICATION DEBUG: After filtering: ${relevantWeatherChanges.length} weather changes`);
 
       if (relevantWeatherChanges.length === 0) {
         console.log(`🌦️ No favorited weather changes for ${deviceToken.substring(0, 10)}... - skipping`);
@@ -1009,6 +1099,10 @@ async function sendWeatherNotifications(weatherChanges) {
     }
 
     console.log(`🌦️ WEATHER NOTIFICATION DEBUG: Sending ${relevantWeatherChanges.length} relevant weather changes to ${deviceToken.substring(0, 10)}...`);
+    
+    if (weatherMode !== 'favorites') {
+      console.log(`🌦️ WEATHER NOTIFICATION DEBUG: User is in ${weatherMode} mode - sending ALL weather changes`);
+    }
 
     // Group weather changes by active/inactive
     const activeWeather = relevantWeatherChanges.filter(w => w.isActive);
@@ -1323,10 +1417,110 @@ function getCategoryEmoji(category) {
     'seeds': '🌱',
     'gear': '⚙️',
     'eggs': '🥚',
-    'cosmetic': '🎨'
+    'cosmetic': '🎨',
+    'traveling_merchant': '🛒'
   };
   
   return categoryMap[category] || '📦';
+}
+
+// Helper: Get emoji for merchant name
+function normalizeMerchantName(rawName) {
+  const name = (rawName || '').toLowerCase();
+  if (name.includes('gnome')) return 'Gnome Merchant';
+  if (name.includes('sky')) return 'Sky Merchant';
+  if (name.includes('honey')) return 'Honey Merchant';
+  if (name.includes('summer') || name.includes('seed')) return 'Summer Seed Merchant';
+  if (name.includes('spray') || name.includes('mutation')) return 'Mutation Spray Merchant';
+  return 'Traveling Merchant';
+}
+
+function getMerchantEmoji(merchantName) {
+  const canonical = normalizeMerchantName(merchantName);
+  switch (canonical) {
+    case 'Gnome Merchant': return '🧙‍♂️';
+    case 'Sky Merchant': return '🌤️';
+    case 'Honey Merchant': return '🍯';
+    case 'Summer Seed Merchant': return '☀️';
+    case 'Mutation Spray Merchant': return '🧪';
+    default: return '🛒';
+  }
+}
+
+function formatTMItemList(items, maxItems = 6) {
+  const parts = items.map(i => {
+    const qty = i.quantity || 0;
+    const name = i.displayName || i.name || 'Item';
+    return `x${qty} ${name}`;
+  });
+  if (parts.length <= maxItems) return parts.join(' - ');
+  const shown = parts.slice(0, maxItems).join(' - ');
+  return `${shown} +${parts.length - maxItems} more`;
+}
+
+// Send Traveling Merchant availability notifications
+async function sendTravelingMerchantNotifications(tmItems) {
+  if (!apnProvider) {
+    console.log('❌ APNs provider not available for TM notifications');
+    return;
+  }
+  if (!Array.isArray(tmItems) || tmItems.length === 0) return;
+
+  // Window-based dedup per user
+  const tmWindow = getCurrentTravelingMerchantWindow(new Date());
+  const dedupeKey = `tm-${tmWindow.startUnix}`;
+
+  const merchantName = normalizeMerchantName(tmItems[0]?.merchant || 'Traveling Merchant');
+  const emoji = getMerchantEmoji(merchantName);
+  const title = `${emoji} ${merchantName} Arrived!`;
+  const body = formatTMItemList(tmItems, 6);
+
+  for (const [deviceToken, userData] of users) {
+    const tmEnabled = userData.travelingMerchantSettings?.enabled ?? true;
+    const notifEnabled = userData.notification_settings?.enabled !== false;
+    if (!tmEnabled || !notifEnabled) continue;
+
+    // Per-user, per-window deduplication (send only once each window)
+    const now = Date.now();
+    if (!recentNotifications.has(deviceToken)) {
+      recentNotifications.set(deviceToken, new Map());
+    }
+    const userNotifications = recentNotifications.get(deviceToken);
+    if (userNotifications.has(dedupeKey)) {
+      // Already sent for this window
+      continue;
+    }
+
+    try {
+      const notification = new apn.Notification();
+      notification.alert = { title, body };
+      notification.payload = {
+        type: 'traveling_merchant',
+        merchant: merchantName,
+        window_start_unix: tmWindow.startUnix,
+        items: tmItems.map(i => ({ name: i.displayName || i.name, quantity: i.quantity }))
+      };
+      notification.badge = tmItems.length;
+      notification.sound = getUserSoundPreference(deviceToken, 'stock');
+      notification.topic = process.env.APNS_BUNDLE_ID || 'drshpackz.GrowAGarden';
+      notification.threadId = 'traveling-merchant';
+      notification.category = 'TRAVELING_MERCHANT';
+
+      const result = await apnProvider.send(notification, [deviceToken]);
+      if (result.failed.length > 0) {
+        const failure = result.failed[0];
+        if (failure.response?.reason === 'BadDeviceToken' || failure.response?.reason === 'Unregistered') {
+          users.delete(deviceToken);
+        }
+      }
+      if (result.sent && result.sent.length > 0) {
+        // Mark as sent for this window only on success
+        userNotifications.set(dedupeKey, now);
+      }
+    } catch (e) {
+      console.log('❌ TM notification error:', e.message);
+    }
+  }
 }
 
 // NEW: Format item with quantity and emoji
@@ -1689,6 +1883,11 @@ async function updateEventData() {
 // Update stock data and weather data, check for changes
 async function updateStockData() {
   try {
+    if (isUpdateInProgress) {
+      console.log('⏳ Update already in progress, skipping concurrent run');
+      return;
+    }
+    isUpdateInProgress = true;
     // Store previous data for comparison
     previousStockItems = new Map(stockItems);
     previousWeatherData = new Map(weatherData);
@@ -1712,10 +1911,111 @@ async function updateStockData() {
     await checkEventNotifications();
     
     console.log(`📊 Update complete - tracking ${stockItems.size} items, ${weatherData.size} weather events`);
+
+    // Smart TM freshness check, retry, and optional user alert when TM appears
+    const tmWindow = getCurrentTravelingMerchantWindow(new Date());
+    if (tmWindow.isInWindow) {
+      const tmList = Array.from(stockItems.values()).filter(i => i.category === 'traveling_merchant');
+      const hasTM = tmList.length > 0 && tmList.some(i => {
+        if (typeof i.startDate !== 'number') return true; // if unknown, assume present
+        return i.startDate >= tmWindow.startUnix && i.startDate < (tmWindow.startUnix + 1800);
+      });
+      if (!hasTM) {
+        scheduleTravelingMerchantRetry(tmWindow.startUnix);
+      } else {
+        clearTravelingMerchantRetry();
+        // Send TM alert once per window only
+        if (lastTmAlertWindowUnix !== tmWindow.startUnix) {
+          try {
+            await sendTravelingMerchantNotifications(tmList);
+            lastTmAlertWindowUnix = tmWindow.startUnix;
+            console.log(`🛎️ TM alert sent for window ${tmWindow.startUnix}`);
+          } catch (e) {
+            console.log('❌ Error sending TM notifications:', e.message);
+          }
+        }
+      }
+    } else {
+      clearTravelingMerchantRetry();
+      // Reset per-process alert marker if we have moved past the window end by >30m
+      if (lastTmAlertWindowUnix && lastTmAlertWindowUnix < (getCurrentTravelingMerchantWindow(new Date()).startUnix - 1)) {
+        lastTmAlertWindowUnix = null;
+      }
+    }
     
   } catch (error) {
     console.error('❌ Error updating stock/weather data:', error);
+  } finally {
+    isUpdateInProgress = false;
   }
+}
+
+// Determine current 4-hour TM window and whether now is inside it (supports offset minutes)
+function getCurrentTravelingMerchantWindow(now) {
+  const utc = new Date(now);
+  const offsetMin = parseInt(process.env.TM_WINDOW_OFFSET_MINUTES || '0'); // e.g., -60 to start at 23,03,07,11,15,19
+  const totalMin = utc.getUTCHours() * 60 + utc.getUTCMinutes();
+  const currentAligned = Math.floor((totalMin - offsetMin) / 240) * 240 + offsetMin; // aligned start in minutes from 00:00
+
+  const start = new Date(Date.UTC(
+    utc.getUTCFullYear(),
+    utc.getUTCMonth(),
+    utc.getUTCDate(),
+    0,
+    0,
+    0,
+    0
+  ));
+  start.setUTCMinutes(((currentAligned % 1440) + 1440) % 1440, 0, 0);
+
+  const end = new Date(start);
+  end.setUTCMinutes(start.getUTCMinutes() + 240, 0, 0); // +4 hours
+
+  if (end <= start) {
+    end.setUTCDate(end.getUTCDate() + 1);
+  }
+
+  const isInWindow = utc >= start && utc < end;
+  const startUnix = Math.floor(start.getTime() / 1000);
+  const endUnix = Math.floor(end.getTime() / 1000);
+  return { isInWindow, startUnix, endUnix };
+}
+
+function scheduleTravelingMerchantRetry(windowStartUnix) {
+  try {
+    if (tmRetryState.lastWindowStartUnix !== windowStartUnix) {
+      // New window, reset attempts
+      clearTravelingMerchantRetry();
+      tmRetryState.lastWindowStartUnix = windowStartUnix;
+      tmRetryState.attempts = 0;
+    }
+    if (tmRetryState.attempts >= 6) {
+      console.log('🛑 TM retry limit reached for this window');
+      return;
+    }
+    const base = 5000; // 5s base
+    const delay = Math.min(60000, base * Math.pow(2, tmRetryState.attempts)) + Math.floor(Math.random() * 1000);
+    tmRetryState.attempts += 1;
+    if (tmRetryState.timer) clearTimeout(tmRetryState.timer);
+    console.log(`🔁 Scheduling TM freshness retry #${tmRetryState.attempts} in ${delay}ms`);
+    tmRetryState.timer = setTimeout(async () => {
+      try {
+        await updateStockData();
+      } catch (e) {
+        console.log('❌ TM retry error:', e.message);
+      }
+    }, delay);
+  } catch (e) {
+    console.log('❌ scheduleTravelingMerchantRetry error:', e.message);
+  }
+}
+
+function clearTravelingMerchantRetry() {
+  if (tmRetryState.timer) {
+    clearTimeout(tmRetryState.timer);
+    tmRetryState.timer = null;
+  }
+  tmRetryState.attempts = 0;
 }
 
 // Initialize APNs and start monitoring
@@ -1759,6 +2059,54 @@ app.get('/privacy', (req, res) => {
 // Get current stock data with v2 API enhancements
 app.get('/api/stock', (req, res) => {
   const now = new Date();
+  // Compute next traveling merchant window (every 4 hours UTC: 00,04,08,12,16,20)
+  const nextTM = calculateNextTravelingMerchantWindow(now);
+  const tmItemsAll = Array.from(stockItems.values()).filter(i => i.category === 'traveling_merchant');
+  // Derive merchant name from any TM item (all share same merchant within window)
+  const merchantName = tmItemsAll.find(i => !!i.merchant)?.merchant || null;
+  // Determine user-preferred TM sound from stored settings (fallback to stock sound logic when sending)
+
+  // Determine if TM is currently active (first 30 minutes after window start or API-provided end)
+  const nowUnix = Math.floor(now.getTime() / 1000);
+  const window = getCurrentTravelingMerchantWindow(now);
+  // Strict active window: exactly first 30 minutes after window start
+  const activeUntilUnix = window.startUnix + 1800;
+  const isTMActive = nowUnix >= window.startUnix && nowUnix < activeUntilUnix;
+
+  // Only expose TM items while active. Also filter out any items that individually expired.
+  const tmItems = isTMActive
+    ? tmItemsAll.filter(i => {
+        const itemEnd = typeof i.endDate === 'number' ? i.endDate : (typeof i.startDate === 'number' ? i.startDate + 1800 : activeUntilUnix);
+        return nowUnix < itemEnd;
+      })
+    : [];
+
+  // Last known TM items from the most recent window (used for clients to show inactive view)
+  let lastTmStartUnix = null;
+  if (tmItemsAll.length > 0) {
+    const starts = tmItemsAll
+      .map(i => (typeof i.startDate === 'number' ? i.startDate : 0))
+      .filter(s => s > 0);
+    if (starts.length > 0) {
+      lastTmStartUnix = Math.max(...starts);
+    }
+  }
+  const lastTmItems = (lastTmStartUnix
+    ? tmItemsAll.filter(i => (typeof i.startDate === 'number' ? i.startDate : 0) === lastTmStartUnix)
+    : tmItemsAll
+  ).map(i => ({
+    name: i.displayName || i.name,
+    display_name: i.displayName || i.name,
+    quantity: i.quantity,
+    category: 'traveling_merchant',
+    item_id: i.itemId,
+    icon: i.icon,
+    start_date: i.startDate,
+    end_date: i.endDate,
+    rarity: i.rarity,
+    merchant: i.merchant || merchantName
+  }));
+
   const stockArray = Array.from(stockItems.entries()).map(([name, data]) => ({
     name,
     display_name: data.displayName || name,
@@ -1768,13 +2116,29 @@ app.get('/api/stock', (req, res) => {
     icon: data.icon,
     start_date: data.startDate,
     end_date: data.endDate,
-    rarity: data.rarity  // NEW: Include API-provided rarity
+    rarity: data.rarity,  // NEW: Include API-provided rarity
+    merchant: data.merchant || null
   }));
-  
+  // Replace traveling_merchant items with filtered active list representation
+  const stockArrayFiltered = stockArray.filter(i => i.category !== 'traveling_merchant').concat(
+    tmItems.map(i => ({
+      name: i.displayName || i.name,
+      display_name: i.displayName || i.name,
+      quantity: i.quantity,
+      category: 'traveling_merchant',
+      item_id: i.itemId,
+      icon: i.icon,
+      start_date: i.startDate,
+      end_date: i.endDate,
+      rarity: i.rarity,
+      merchant: i.merchant || null
+    }))
+  );
+
   res.json({
     success: true,
-    stock_items: stockArray,
-    total_items: stockItems.size,
+    stock_items: stockArrayFiltered,
+    total_items: stockArrayFiltered.length,
     last_updated: now.toISOString(),
     api_version: 'v2',
     timing_data: {
@@ -1784,13 +2148,51 @@ app.get('/api/stock', (req, res) => {
         seconds_ago: Math.floor((now - lastStockUpdateTime) / 1000),
         freshness_rating: getFreshnessRating(now, lastStockUpdateTime)
       } : null,
-      next_update_in_seconds: 30 - (Math.floor((now - (lastAPICallTime || now)) / 1000) % 30)
+      next_update_in_seconds: 30 - (Math.floor((now - (lastAPICallTime || now)) / 1000) % 30),
+      traveling_merchant: { 
+        ...nextTM, 
+        count: tmItems.length,
+        active: isTMActive,
+        window_start_utc: new Date(window.startUnix * 1000).toISOString(),
+        active_until_utc: new Date(activeUntilUnix * 1000).toISOString(),
+        seconds_until_end: isTMActive ? Math.max(0, activeUntilUnix - nowUnix) : null,
+        merchant_name: merchantName,
+        last_items: lastTmItems,
+        last_window_start_utc: lastTmStartUnix ? new Date(lastTmStartUnix * 1000).toISOString() : null
+      }
     }
   });
 });
 
+// Calculate next traveling merchant window info (supports offset minutes)
+function calculateNextTravelingMerchantWindow(now) {
+  try {
+    const utc = new Date(now);
+    const offsetMin = parseInt(process.env.TM_WINDOW_OFFSET_MINUTES || '0');
+    const totalMin = utc.getUTCHours() * 60 + utc.getUTCMinutes();
+    const currentSec = totalMin * 60 + utc.getUTCSeconds();
+    const fourHoursSec = 4 * 3600;
+
+    // Align timeline by offset, then step to next multiple of 4h
+    const shifted = currentSec - offsetMin * 60;
+    const nextAligned = Math.ceil((shifted + 1) / fourHoursSec) * fourHoursSec + offsetMin * 60;
+
+    const next = new Date(Date.UTC(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(), 0, 0, 0, 0));
+    next.setUTCSeconds(((nextAligned % (24 * 3600)) + (24 * 3600)) % (24 * 3600), 0);
+    if (next <= utc) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+
+    const secondsUntil = Math.max(0, Math.floor((next - utc) / 1000));
+    return { cadence_hours: 4, next_window_utc: next.toISOString(), seconds_until_next_window: secondsUntil };
+  } catch (e) {
+    return { cadence_hours: 4, next_window_utc: null, seconds_until_next_window: null };
+  }
+}
+
 // Get current weather data
 app.get('/api/weather', (req, res) => {
+  const ignoredWeather = parseIgnoredWeatherNames();
   const weatherArray = Array.from(weatherData.entries()).map(([weatherId, data]) => ({
     weather_id: weatherId,
     weather_name: data.weatherName,
@@ -1799,12 +2201,12 @@ app.get('/api/weather', (req, res) => {
     start_duration: data.startDuration,
     end_duration: data.endDuration,
     icon: data.icon
-  }));
+  })).filter(w => !ignoredWeather.has((w.weather_name || '').toLowerCase()));
   
   res.json({
     success: true,
     weather_events: weatherArray,
-    total_events: weatherData.size,
+    total_events: weatherArray.length,
     last_updated: new Date().toISOString(),
     api_version: 'v2'
   });
@@ -1812,54 +2214,13 @@ app.get('/api/weather', (req, res) => {
 
 // Get current event data
 app.get('/api/event', (req, res) => {
-  try {
-    // Parse background gradient safely
-    let backgroundGradient;
-    try {
-      backgroundGradient = JSON.parse(process.env.EVENT_BACKGROUND_GRADIENT || '["#1a1a2e", "#16213e", "#0f0f23"]');
-    } catch (error) {
-      console.log('⚠️ Error parsing EVENT_BACKGROUND_GRADIENT, using default');
-      backgroundGradient = ["#1a1a2e", "#16213e", "#0f0f23"];
-    }
-    
-    // Enhanced current event with theme data and color variations
-    const enhancedCurrentEvent = currentEvent ? {
-      ...currentEvent,
-      theme: {
-        primaryColor: process.env.EVENT_THEME_PRIMARY_COLOR || "#7B68EE",
-        secondaryColor: process.env.EVENT_THEME_SECONDARY_COLOR || "#4ECDC4", 
-        accentColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700",
-        backgroundGradient: backgroundGradient,
-        particleType: process.env.EVENT_PARTICLE_TYPE || "none",
-        cardStyle: process.env.EVENT_CARD_STYLE || "default",
-        wallpaperUrl: process.env.EVENT_WALLPAPER_URL || null,
-        glowColor: process.env.EVENT_THEME_ACCENT_COLOR || "#FFD700",
-        // Additional color variations for different blocks
-        eventCardColor: process.env.EVENT_CARD_COLOR || process.env.EVENT_THEME_PRIMARY_COLOR || "#7B68EE",
-        settingsCardColor: process.env.SETTINGS_CARD_COLOR || process.env.EVENT_THEME_SECONDARY_COLOR || "#4ECDC4",
-        colorVariation: process.env.EVENT_COLOR_VARIATION || "default" // options: default, gradient, rainbow, monochrome
-      }
-    } : null;
-
-    res.json({
-      success: true,
-      current_event: enhancedCurrentEvent,
-      last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
-      event_timer_minutes: process.env.EVENT_TIMER || '00',
-      api_version: 'v2'
-    });
-    
-  } catch (error) {
-    console.error('❌ Error building event response:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-      current_event: null,
-      last_updated: null,
-      event_timer_minutes: process.env.EVENT_TIMER || '00',
-      api_version: 'v2'
-    });
-  }
+  res.json({
+    success: true,
+    current_event: currentEvent,
+    last_updated: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
+    event_timer_minutes: process.env.EVENT_TIMER || '00',
+    api_version: 'v2'
+  });
 });
 
 // Get combined stock and weather data
@@ -1900,7 +2261,7 @@ app.get('/api/game-data', (req, res) => {
 
 // Register device endpoint
 app.post('/api/register-device', (req, res) => {
-  const { device_token, platform, app_version, favorite_items, favorite_weather_events, notification_settings, event_notification_settings, weather_notification_settings } = req.body;
+  const { device_token, platform, app_version, favorite_items, favorite_weather_events, notification_settings, event_notification_settings, weather_notification_settings, traveling_merchant_settings } = req.body;
   
   if (!device_token) {
     return res.status(400).json({ error: 'Device token is required' });
@@ -1935,6 +2296,7 @@ app.post('/api/register-device', (req, res) => {
     notification_settings: notification_settings || {},
     eventNotificationSettings: event_notification_settings || {},
     weatherNotificationSettings: weather_notification_settings || {},
+    travelingMerchantSettings: traveling_merchant_settings || { enabled: true },
     last_updated: new Date().toISOString()
   });
   
@@ -2118,6 +2480,28 @@ app.post('/api/debug-automatic-monitoring', async (req, res) => {
   } catch (error) {
     console.error('❌ Debug automatic monitoring error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Debug: force-send Traveling Merchant notifications to all eligible users
+app.post('/api/debug-send-traveling-merchant', async (req, res) => {
+  try {
+    const { api_secret } = req.body || {};
+    const expectedSecret = process.env.API_SECRET || 'growagargen-secret-2025';
+    if (api_secret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const tmItems = Array.from(stockItems.values()).filter(i => i.category === 'traveling_merchant');
+    if (tmItems.length === 0) {
+      return res.json({ success: false, message: 'No traveling merchant items loaded', items: 0 });
+    }
+
+    await sendTravelingMerchantNotifications(tmItems);
+    return res.json({ success: true, message: 'TM notifications attempted to all eligible users', items: tmItems.length });
+  } catch (error) {
+    console.error('❌ Debug TM send error:', error);
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
