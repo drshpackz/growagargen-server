@@ -97,7 +97,7 @@ function parseRarityFixes() {
 }
 
 // Parse list of weather names to ignore (comma-separated, case-insensitive)
-function parseIgnoredWeatherNames() {
+function parseIgnoredWeatherTokens() {
   try {
     const raw = process.env.IGNOREWEATHER || '';
     const names = raw
@@ -415,7 +415,8 @@ function processEventData(apiResponse) {
       originalHour: eventData.start?.hour || 0,
       originalMinute: eventData.start?.minute || 0,
       correctedMinute: correctedMinutes, // Use environment variable
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
+      theme: buildEventThemeFromEnv()
     };
 
     console.log(`🎉 Processed event: ${processedEvent.name}`);
@@ -426,6 +427,66 @@ function processEventData(apiResponse) {
     
   } catch (error) {
     console.error('❌ Error processing event data:', error);
+    return null;
+  }
+}
+
+// Build Event Theme from ENV so clients can render themed UI
+function buildEventThemeFromEnv() {
+  try {
+    // Colors
+    const primary = process.env.EVENT_THEME_PRIMARY_COLOR || '#6B30E9';
+    const secondary = process.env.EVENT_THEME_SECONDARY_COLOR || '#3380E6';
+    const accent = process.env.EVENT_THEME_ACCENT_COLOR || '#FF9933';
+    const glow = process.env.EVENT_THEME_GLOW_COLOR || accent;
+
+    // Card style and variation
+    const cardStyle = (process.env.EVENT_CARD_STYLE || 'default').toLowerCase();
+    const colorVariation = (process.env.EVENT_COLOR_VARIATION || 'default').toLowerCase();
+
+    // Optional overrides
+    const eventCardColor = process.env.EVENT_CARD_COLOR || null;
+    const settingsCardColor = process.env.EVENT_SETTINGS_CARD_COLOR || null;
+    const wallpaperUrl = process.env.EVENT_WALLPAPER_URL || null;
+
+    // Background gradient can be JSON array or comma-separated
+    let backgroundGradient = ['#0F131F', '#1A2030', '#0F141E'];
+    const rawGradient = process.env.EVENT_BACKGROUND_GRADIENT || '';
+    if (rawGradient.trim()) {
+      try {
+        if (rawGradient.trim().startsWith('[')) {
+          const parsed = JSON.parse(rawGradient);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            backgroundGradient = parsed;
+          }
+        } else {
+          backgroundGradient = rawGradient.split(',').map(s => s.trim()).filter(Boolean);
+        }
+      } catch (e) {
+        console.log('⚠️ Failed to parse EVENT_BACKGROUND_GRADIENT, using defaults');
+      }
+    }
+
+    // Particles
+    const particleType = (process.env.EVENT_PARTICLE_TYPE || 'none').toLowerCase();
+
+    const theme = {
+      primaryColor: primary,
+      secondaryColor: secondary,
+      accentColor: accent,
+      backgroundGradient: backgroundGradient,
+      particleType: particleType,
+      cardStyle: cardStyle,
+      wallpaperUrl: wallpaperUrl,
+      glowColor: glow,
+      eventCardColor: eventCardColor,
+      settingsCardColor: settingsCardColor,
+      colorVariation: colorVariation
+    };
+
+    return theme;
+  } catch (e) {
+    console.log('⚠️ buildEventThemeFromEnv error:', e.message);
     return null;
   }
 }
@@ -723,7 +784,7 @@ async function processStockData(apiResponse) {
 // Process weather data from v2 API
 async function processWeatherData(apiResponse) {
   const processedWeather = new Map();
-  const ignoredWeather = parseIgnoredWeatherNames();
+  const ignoredWeather = parseIgnoredWeatherTokens();
   
   if (!apiResponse || !apiResponse.weather || !Array.isArray(apiResponse.weather)) {
     console.log('⚠️ No weather data in API response');
@@ -733,7 +794,9 @@ async function processWeatherData(apiResponse) {
   for (const weather of apiResponse.weather) {
     // Skip ignored weather by name (case-insensitive)
     const wName = (weather.weather_name || '').toLowerCase();
-    if (ignoredWeather.has(wName)) {
+    // Match by token presence anywhere in the name to be resilient (e.g., "NightEvent" filtered by "night")
+    const shouldIgnore = Array.from(ignoredWeather).some(token => token && wName.includes(token));
+    if (shouldIgnore) {
       console.log(`🚫 IGNOREWEATHER: Skipping weather '${weather.weather_name}'`);
       continue;
     }
@@ -973,7 +1036,7 @@ async function checkWeatherChanges() {
     return;
   }
 
-  const ignoredWeather = parseIgnoredWeatherNames();
+  const ignoredWeather = parseIgnoredWeatherTokens();
   console.log(`🌦️ WEATHER MONITORING DEBUG: Starting weather change check...`);
   console.log(`🌦️ WEATHER MONITORING DEBUG: Previous weather events: ${previousWeatherData.size}`);
   console.log(`🌦️ WEATHER MONITORING DEBUG: Current weather events: ${weatherData.size}`);
@@ -982,7 +1045,8 @@ async function checkWeatherChanges() {
 
   // Compare current weather with previous weather
   for (const [weatherId, currentWeather] of weatherData) {
-    if (ignoredWeather.has((currentWeather.weatherName || '').toLowerCase())) {
+    const curName = (currentWeather.weatherName || '').toLowerCase();
+    if (Array.from(ignoredWeather).some(token => token && curName.includes(token))) {
       continue; // Skip ignored weather entirely
     }
     const previousWeather = previousWeatherData.get(weatherId);
@@ -1006,7 +1070,8 @@ async function checkWeatherChanges() {
 
   // Check for weather events that ended (no longer in current data)
   for (const [weatherId, previousWeather] of previousWeatherData) {
-    if (ignoredWeather.has((previousWeather.weatherName || '').toLowerCase())) {
+    const prevName = (previousWeather.weatherName || '').toLowerCase();
+    if (Array.from(ignoredWeather).some(token => token && prevName.includes(token))) {
       continue;
     }
     if (!weatherData.has(weatherId) && previousWeather.active) {
@@ -2192,7 +2257,7 @@ function calculateNextTravelingMerchantWindow(now) {
 
 // Get current weather data
 app.get('/api/weather', (req, res) => {
-  const ignoredWeather = parseIgnoredWeatherNames();
+  const ignoredWeather = parseIgnoredWeatherTokens();
   const weatherArray = Array.from(weatherData.entries()).map(([weatherId, data]) => ({
     weather_id: weatherId,
     weather_name: data.weatherName,
@@ -2201,7 +2266,10 @@ app.get('/api/weather', (req, res) => {
     start_duration: data.startDuration,
     end_duration: data.endDuration,
     icon: data.icon
-  })).filter(w => !ignoredWeather.has((w.weather_name || '').toLowerCase()));
+  })).filter(w => {
+    const wName = (w.weather_name || '').toLowerCase();
+    return !Array.from(ignoredWeather).some(token => token && wName.includes(token));
+  });
   
   res.json({
     success: true,
