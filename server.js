@@ -12,6 +12,16 @@ app.use(cors());
 // Serve static files (for the banner HTML page)
 app.use(express.static('public'));
 
+// [TRADING 🪖] Mount trading routes
+try {
+  console.log('[TRADING 🪖] Mounting trading routes at /api/trade');
+  const tradeRouter = require('./trade');
+  app.use('/api/trade', tradeRouter);
+  console.log('[TRADING 🪖] Trading routes mounted successfully');
+} catch (e) {
+  console.log('[TRADING 🪖] Failed to mount trading routes:', e?.message || e);
+}
+
 // Serve app-ads.txt for AdMob verification
 app.get('/app-ads.txt', (req, res) => {
     res.setHeader('Content-Type', 'text/plain');
@@ -25,7 +35,18 @@ let previousStockItems = new Map(); // For change detection
 
 // Deduplication tracking
 let recentNotifications = new Map(); // device_token -> Map(category+items -> timestamp)
-const DEDUPLICATION_WINDOW = 5 * 60 * 1000; // 5 minutes (was 30 seconds)
+const DEFAULT_DEDUPLICATION_WINDOW = 5 * 60 * 1000; // seeds/gear default 5 minutes
+
+// Category-specific dedup windows to avoid spam for slower restock cadences
+function getCategoryDedupWindowMs(categoryName) {
+  const cat = String(categoryName || '').toLowerCase();
+  if (cat === 'eggs') {
+    // Eggs restock every ~30 minutes → notify no more than once per ~40 minutes
+    return 40 * 60 * 1000;
+  }
+  // Cosmetic/others can use default unless customized later
+  return DEFAULT_DEDUPLICATION_WINDOW;
+}
 
 // APNs Provider - will be initialized when we have the key
 let apnProvider = null;
@@ -54,6 +75,12 @@ const STOCK_API_URL = 'https://api.joshlei.com/v2/growagarden/stock';
 const WEATHER_API_URL = 'https://api.joshlei.com/v2/growagarden/weather';
 const ITEM_INFO_API_URL = 'https://api.joshlei.com/v2/growagarden/info';
 const EVENT_API_URL = 'https://api.joshlei.com/v2/growagarden/currentevent';
+
+// Event Configuration Environment Variables:
+// - CURRENT_EVENT_NAME: Override the current event name (priority: ENV > API)
+// - CURRENT_EVENT_ICON: Override the current event icon URL (priority: ENV > API)
+// - EVENT_TIMER: Override the event timing in minutes (default: 00)
+// - EVENT_THEME_*: Various theme customization options
 
 // Cache for item info to avoid repeated API calls
 let itemInfoCache = new Map(); // item_id -> item_info
@@ -362,6 +389,14 @@ async function fetchEventData() {
   try {
     console.log('🎉 Fetching current event data from v2 API...');
     
+    // Log environment variable status
+    if (process.env.CURRENT_EVENT_NAME) {
+      console.log(`🔧 Environment override available: CURRENT_EVENT_NAME="${process.env.CURRENT_EVENT_NAME}"`);
+    }
+    if (process.env.CURRENT_EVENT_ICON) {
+      console.log(`🔧 Environment override available: CURRENT_EVENT_ICON="${process.env.CURRENT_EVENT_ICON}"`);
+    }
+    
     const apiKey = process.env.JSTUDIO_API_KEY;
     if (!apiKey) {
       console.log('⚠️ No API key configured, skipping event data');
@@ -377,7 +412,14 @@ async function fetchEventData() {
     });
 
     if (!response.ok) {
-      console.log(`⚠️ Event API returned ${response.status}, skipping event data`);
+      console.log(`⚠️ Event API returned ${response.status}, checking for fallback event data`);
+      
+      // If API fails but we have environment variable, create fallback event
+      if (process.env.CURRENT_EVENT_NAME) {
+        console.log(`🔄 Creating fallback event from environment variable: ${process.env.CURRENT_EVENT_NAME}`);
+        return createFallbackEvent();
+      }
+      
       return null;
     }
 
@@ -399,7 +441,14 @@ async function fetchEventData() {
 function processEventData(apiResponse) {
   try {
     if (!apiResponse || !apiResponse.current) {
-      console.log('⚠️ No current event in API response');
+      console.log('⚠️ No current event in API response, checking for fallback event data');
+      
+      // If API has no current event but we have environment variable, create fallback event
+      if (process.env.CURRENT_EVENT_NAME) {
+        console.log(`🔄 Creating fallback event from environment variable: ${process.env.CURRENT_EVENT_NAME}`);
+        return createFallbackEvent();
+      }
+      
       return null;
     }
 
@@ -409,9 +458,15 @@ function processEventData(apiResponse) {
     const eventTimerMinutes = process.env.EVENT_TIMER || '00';
     const correctedMinutes = parseInt(eventTimerMinutes);
     
+    // Override event name with environment variable if set (priority: ENV > API)
+    const eventName = process.env.CURRENT_EVENT_NAME || eventData.name;
+    
+    // Override event icon with environment variable if set (priority: ENV > API)
+    const eventIcon = process.env.CURRENT_EVENT_ICON || eventData.icon;
+    
     const processedEvent = {
-      name: eventData.name,
-      icon: eventData.icon,
+      name: eventName,
+      icon: eventIcon,
       originalHour: eventData.start?.hour || 0,
       originalMinute: eventData.start?.minute || 0,
       correctedMinute: correctedMinutes, // Use environment variable
@@ -419,14 +474,49 @@ function processEventData(apiResponse) {
       theme: buildEventThemeFromEnv()
     };
 
-    console.log(`🎉 Processed event: ${processedEvent.name}`);
+    console.log(`🎉 Processed event: ${processedEvent.name}${process.env.CURRENT_EVENT_NAME ? ' [OVERRIDE from ENV]' : ' [from API]'}`);
     console.log(`⏰ Original timing: ${eventData.start?.hour || 0}:${eventData.start?.minute || 0}`);
     console.log(`🔧 Corrected timing: Every hour at minute ${correctedMinutes} (from EVENT_TIMER=${eventTimerMinutes})`);
+    if (process.env.CURRENT_EVENT_NAME) {
+      console.log(`🔧 Event name override: API="${eventData.name}" → ENV="${process.env.CURRENT_EVENT_NAME}"`);
+    }
+    if (process.env.CURRENT_EVENT_ICON) {
+      console.log(`🔧 Event icon override: API="${eventData.icon || 'none'}" → ENV="${process.env.CURRENT_EVENT_ICON}"`);
+    }
     
     return processedEvent;
     
   } catch (error) {
     console.error('❌ Error processing event data:', error);
+    return null;
+  }
+}
+
+// Create fallback event data when API fails but environment variable is set
+function createFallbackEvent() {
+  try {
+    const eventName = process.env.CURRENT_EVENT_NAME;
+    const eventTimerMinutes = process.env.EVENT_TIMER || '00';
+    const correctedMinutes = parseInt(eventTimerMinutes);
+    
+    const fallbackEvent = {
+      name: eventName,
+      icon: process.env.CURRENT_EVENT_ICON || null, // Optional icon override
+      originalHour: 0,
+      originalMinute: 0,
+      correctedMinute: correctedMinutes,
+      lastUpdated: new Date().toISOString(),
+      theme: buildEventThemeFromEnv(),
+      isFallback: true // Flag to indicate this is fallback data
+    };
+
+    console.log(`🔄 Created fallback event: ${fallbackEvent.name} (every hour at :${String(correctedMinutes).padStart(2, '0')})`);
+    console.log(`🔧 Fallback event timing: Every hour at minute ${correctedMinutes} (from EVENT_TIMER=${eventTimerMinutes})`);
+    
+    return fallbackEvent;
+    
+  } catch (error) {
+    console.error('❌ Error creating fallback event:', error);
     return null;
   }
 }
@@ -1776,6 +1866,7 @@ async function sendCategoryNotification(deviceToken, category, items) {
   
   // Check for recent duplicate
   const now = Date.now();
+  const windowMs = getCategoryDedupWindowMs(category);
   if (!recentNotifications.has(deviceToken)) {
     recentNotifications.set(deviceToken, new Map());
   }
@@ -1783,14 +1874,14 @@ async function sendCategoryNotification(deviceToken, category, items) {
   const userNotifications = recentNotifications.get(deviceToken);
   const lastSent = userNotifications.get(deduplicationKey);
   
-  if (lastSent && (now - lastSent) < DEDUPLICATION_WINDOW) {
+  if (lastSent && (now - lastSent) < windowMs) {
     const timeSince = Math.floor((now - lastSent) / 1000);
     console.log(`🚫 DUPLICATE BLOCKED: ${category} notification for ${deviceToken.substring(0, 10)}... already sent ${timeSince}s ago`);
     return;
   }
   
   // Clean up old entries (older than 2x deduplication window)
-  const cutoffTime = now - (DEDUPLICATION_WINDOW * 2);
+  const cutoffTime = now - (windowMs * 2);
   for (const [key, timestamp] of userNotifications.entries()) {
     if (timestamp < cutoffTime) {
       userNotifications.delete(key);
@@ -2289,6 +2380,39 @@ app.get('/api/event', (req, res) => {
     event_timer_minutes: process.env.EVENT_TIMER || '00',
     api_version: 'v2'
   });
+});
+
+// Debug endpoint for event configuration
+app.get('/api/debug-event-config', (req, res) => {
+  try {
+    const config = {
+      environment_variables: {
+        CURRENT_EVENT_NAME: process.env.CURRENT_EVENT_NAME || 'not set',
+        CURRENT_EVENT_ICON: process.env.CURRENT_EVENT_ICON || 'not set',
+        EVENT_TIMER: process.env.EVENT_TIMER || '00'
+      },
+      current_event_data: currentEvent,
+      api_status: {
+        event_api_url: EVENT_API_URL,
+        last_fetch: lastEventUpdateTime ? lastEventUpdateTime.toISOString() : null,
+        is_fallback: currentEvent?.isFallback || false
+      },
+      timestamp: new Date().toISOString()
+    };
+    
+    res.json({
+      success: true,
+      config: config
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in debug-event-config:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get event configuration',
+      details: error.message
+    });
+  }
 });
 
 // Get combined stock and weather data
@@ -3541,11 +3665,22 @@ app.listen(PORT, () => {
   
   // Log event timer configuration
   const eventTimer = process.env.EVENT_TIMER || '00';
+  const eventName = process.env.CURRENT_EVENT_NAME || 'from API';
+  const eventIcon = process.env.CURRENT_EVENT_ICON || 'from API';
+  
   console.log(`🎉 Event system configuration:`);
   console.log(`   Event timing: Every hour at minute ${eventTimer} (EVENT_TIMER=${eventTimer})`);
+  console.log(`   Event name: ${eventName}`);
+  console.log(`   Event icon: ${eventIcon}`);
   console.log(`   Fetch interval: Every 1 hour`);
   console.log(`   Current event: ${currentEvent?.name || 'Loading...'}`);
   console.log(`   ⚠️ API currently returns wrong minutes (55 instead of 00) - using EVENT_TIMER override`);
+  if (process.env.CURRENT_EVENT_NAME) {
+    console.log(`   🔧 Event name will be overridden from environment variable`);
+  }
+  if (process.env.CURRENT_EVENT_ICON) {
+    console.log(`   🔧 Event icon will be overridden from environment variable`);
+  }
   
   // Log always-shown items configuration
   const alwaysShownItems = parseAlwaysShownItems();
